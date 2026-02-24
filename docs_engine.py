@@ -74,18 +74,25 @@ class DocsEngine:
         self._pull_prime_docs()
         self._build_index()
 
+    _PRIME_REPO = "https://github.com/peterheim1/robbie_prime"
+
     def _pull_prime_docs(self):
-        if not _PRIME_PATH.exists():
-            logger.info("prime_docs not present — skipping pull")
-            return
         try:
-            r = subprocess.run(
-                ["git", "pull"], cwd=_PRIME_PATH,
-                capture_output=True, text=True, timeout=15,
-            )
-            logger.info(f"prime_docs: {(r.stdout or r.stderr).strip()}")
+            if not _PRIME_PATH.exists():
+                logger.info(f"Cloning prime docs from {self._PRIME_REPO}")
+                r = subprocess.run(
+                    ["git", "clone", self._PRIME_REPO, str(_PRIME_PATH)],
+                    capture_output=True, text=True, timeout=60,
+                )
+                logger.info(f"prime_docs clone: {(r.stdout or r.stderr).strip()}")
+            else:
+                r = subprocess.run(
+                    ["git", "pull"], cwd=_PRIME_PATH,
+                    capture_output=True, text=True, timeout=15,
+                )
+                logger.info(f"prime_docs pull: {(r.stdout or r.stderr).strip()}")
         except Exception as e:
-            logger.warning(f"prime_docs pull skipped: {e}")
+            logger.warning(f"prime_docs sync skipped: {e}")
 
     # ── Indexing ──────────────────────────────────────────────────────────────
 
