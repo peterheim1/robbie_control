@@ -1,0 +1,60 @@
+# Approved commands for the Robbie web interface.
+# Only commands listed here can be executed via the Docs tab "Run on robot" button.
+# background: true  — long-running process; output streams into a result window.
+# background: false — one-shot; waits for completion and shows output.
+
+commands:
+
+  # ── Safety / recovery ──────────────────────────────────────────────────────
+  - id: reset_estop
+    label: "Reset ESP32 ESTOP"
+    cmd: "ros2 service call /cal std_srvs/srv/Empty"
+    background: false
+
+  # ── Diagnostics ────────────────────────────────────────────────────────────
+  - id: check_health
+    label: "Echo health summary"
+    cmd: "ros2 topic echo /health_summary --once"
+    background: false
+
+  - id: list_nodes
+    label: "List ROS2 nodes"
+    cmd: "ros2 node list"
+    background: false
+
+  - id: list_topics
+    label: "List ROS2 topics"
+    cmd: "ros2 topic list"
+    background: false
+
+  - id: battery_voltage
+    label: "Check battery voltage"
+    cmd: "ros2 topic echo /battery_voltage --once"
+    background: false
+
+  # ── Node restarts ──────────────────────────────────────────────────────────
+  - id: restart_base_driver
+    label: "Restart base driver"
+    cmd: "ros2 launch robbie_bot base_driver.launch.py"
+    background: true
+
+  - id: restart_navigation
+    label: "Restart navigation"
+    cmd: "ros2 launch robbie_bot navigation_launch.py"
+    background: true
+
+  - id: restart_voice
+    label: "Restart voice server"
+    cmd: "/home/pi/ros2_ws/src/robbie_control/start.sh"
+    background: true
+
+  # ── Tests ──────────────────────────────────────────────────────────────────
+  - id: run_latency_blocks
+    label: "Run latency test (blocks)"
+    cmd: "ros2 run robbie_bot latency_test.py --ros-args -p mode:=blocks"
+    background: true
+
+  - id: run_latency_floor
+    label: "Run latency test (floor)"
+    cmd: "ros2 run robbie_bot latency_test.py --ros-args -p mode:=floor"
+    background: true

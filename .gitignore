@@ -15,3 +15,6 @@ venv/
 
 # Large model files
 models/
+
+# Runtime data
+data/*.jsonl

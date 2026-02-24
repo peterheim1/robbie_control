@@ -1,17 +1,23 @@
 """Web interface for Robbie voice control server.
 
 Provides:
-  GET  /             — single-page HTML control panel
-  POST /api/command  — inject text command (bypass wake word + STT)
-  POST /api/tts_mute — set TTS mute state  {"muted": true/false}
-  WS   /ws           — real-time event stream + command input
+  GET  /                   — single-page HTML control panel (Control + Docs tabs)
+  POST /api/command        — inject text command (bypass wake word + STT)
+  POST /api/tts_mute       — set TTS mute state  {"muted": true/false}
+  GET  /api/docs/search    — SSE stream: doc search + LLM answer
+  GET  /api/docs/history   — last 20 query/answer entries
+  POST /api/ros2/query     — run a safe read-only ROS2 command
+  WS   /ws                 — real-time event stream + command + run_cmd input
 """
 
 import asyncio
 import json
 import logging
+import subprocess
 from collections import deque
 from typing import Any
+
+from robbie_control.docs_engine import DocsEngine
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +103,61 @@ _HTML = """<!DOCTYPE html>
              padding:5px 16px;background:#0d1117;border-bottom:1px solid #21262d;
              font-size:12px;color:#8b949e}
     .sep{color:#30363d}
+    /* ── Tabs ── */
+    .tab-bar{display:flex;background:#161b22;border-bottom:1px solid #30363d;padding:0 16px}
+    .tab-btn{background:none;border:none;color:#8b949e;font-family:inherit;font-size:13px;
+             padding:10px 16px;cursor:pointer;border-bottom:2px solid transparent;transition:.15s}
+    .tab-btn:hover{color:#e6edf3}
+    .tab-btn.active{color:#58a6ff;border-bottom-color:#58a6ff}
+    .tab-pane{display:none}
+    .tab-pane.active{display:block}
+    /* ── Docs tab ── */
+    .docs-layout{display:flex;height:calc(100vh - 112px)}
+    .docs-sidebar{width:220px;flex-shrink:0;border-right:1px solid #30363d;
+                  background:#161b22;overflow-y:auto;padding:8px 0}
+    .docs-sidebar-hdr{padding:6px 12px;font-size:11px;color:#8b949e;
+                      text-transform:uppercase;letter-spacing:1px;
+                      border-bottom:1px solid #30363d;margin-bottom:4px}
+    .docs-hist-item{padding:6px 12px;font-size:12px;color:#8b949e;cursor:pointer;
+                    border-left:3px solid transparent;white-space:nowrap;
+                    overflow:hidden;text-overflow:ellipsis}
+    .docs-hist-item:hover{background:#21262d;color:#e6edf3;border-left-color:#58a6ff}
+    .docs-main{flex:1;min-width:0;display:flex;flex-direction:column;
+               padding:16px;gap:12px;overflow-y:auto}
+    .docs-search-row{display:flex;gap:8px;flex-shrink:0}
+    .docs-input{flex:1;background:#0d1117;border:1px solid #30363d;border-radius:6px;
+                color:#e6edf3;font-family:inherit;font-size:14px;padding:8px 12px}
+    .docs-input:focus{outline:none;border-color:#58a6ff}
+    .docs-answer{background:#161b22;border:1px solid #30363d;border-radius:8px;
+                 padding:14px;font-size:13px;line-height:1.8;overflow-y:auto;
+                 min-height:160px;flex:1;word-break:break-word}
+    .docs-answer code{background:#0d1117;border-radius:4px;padding:2px 6px;
+                      font-family:'Courier New',monospace;font-size:12px}
+    .docs-answer pre{background:#0d1117;border-radius:6px;padding:10px;margin:8px 0;
+                     overflow-x:auto;font-family:'Courier New',monospace;font-size:12px}
+    .docs-sources{margin-top:10px;border-top:1px solid #30363d;padding-top:8px}
+    .docs-source{font-size:11px;color:#6e7681;margin:2px 0}
+    .docs-cmds{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px;
+               padding-top:8px;border-top:1px solid #30363d}
+    .run-btn{background:#1f2d1f;border:1px solid #3fb950;color:#3fb950;
+             font-family:inherit;font-size:12px;padding:5px 12px;
+             border-radius:4px;cursor:pointer;transition:.15s}
+    .run-btn:hover{background:#3fb950;color:#000}
+    .docs-diag{background:#0d1117;border:1px solid #21262d;border-radius:6px;
+               padding:10px;font-size:11px;color:#8b949e;margin-bottom:10px;
+               font-family:'Courier New',monospace;white-space:pre-wrap}
+    .docs-diag-hdr{color:#e3b341;font-size:11px;text-transform:uppercase;
+                   letter-spacing:1px;margin-bottom:6px}
+    .cmd-result{background:#0d1117;border:1px solid #30363d;border-radius:6px;
+                margin-top:8px;overflow:hidden}
+    .cmd-result-hdr{display:flex;align-items:center;justify-content:space-between;
+                    padding:6px 10px;background:#161b22;font-size:11px;color:#8b949e}
+    .cmd-result-body{padding:8px 10px;font-family:'Courier New',monospace;font-size:11px;
+                     max-height:180px;overflow-y:auto;white-space:pre-wrap;color:#c9d1d9}
+    .stop-btn{background:#3d1f1f;border:1px solid #f85149;color:#f85149;
+              font-family:inherit;font-size:11px;padding:2px 8px;
+              border-radius:3px;cursor:pointer}
+    .stop-btn:hover{background:#f85149;color:#fff}
   </style>
 </head>
 <body>
@@ -111,6 +172,11 @@ _HTML = """<!DOCTYPE html>
     </div>
   </label>
 </header>
+<div class="tab-bar">
+  <button class="tab-btn active" data-tab="control" onclick="showTab('control')">&#x2699; Control</button>
+  <button class="tab-btn" data-tab="docs" onclick="showTab('docs')">&#x1F4DA; Docs</button>
+</div>
+<div id="tab-control" class="tab-pane active">
 <div class="infobar">
   <span id="clock">--:--:--</span>
   <span class="sep">|</span>
@@ -162,6 +228,32 @@ _HTML = """<!DOCTYPE html>
   </div>
 </div>
 </div>
+</div>
+</div>
+<div id="tab-docs" class="tab-pane">
+  <div class="docs-layout">
+    <div class="docs-sidebar">
+      <div class="docs-sidebar-hdr">History</div>
+      <div id="docsHistory"></div>
+    </div>
+    <div class="docs-main">
+      <div class="docs-search-row">
+        <input id="docsInput" class="docs-input" type="text"
+               placeholder="Ask about Robbie, or &#x27;list nodes&#x27;, &#x27;list topics&#x27;&#x2026;"
+               onkeydown="if(event.key===&#x27;Enter&#x27;)docsSearch()">
+        <button class="send-btn" onclick="docsSearch()">Ask</button>
+      </div>
+      <div id="docsDiagWrap" style="display:none">
+        <div class="docs-diag-hdr">&#x1F4E1; Live Diagnostics</div>
+        <div id="docsDiagContent" class="docs-diag"></div>
+      </div>
+      <div id="docsAnswer" class="docs-answer" style="color:#6e7681">Ask anything about Robbie&#x2026;</div>
+      <div id="docsSources" class="docs-sources" style="display:none"></div>
+      <div id="docsCmds" class="docs-cmds" style="display:none"></div>
+      <div id="cmdResults"></div>
+    </div>
+  </div>
+</div>
 <script>
   let ws, reconnTimer;
 
@@ -211,6 +303,16 @@ _HTML = """<!DOCTYPE html>
         case 'task_update':
           handleTaskUpdate(d);
           break;
+        case 'cmd_output': {
+          const body = document.getElementById('cmdbody-' + d.cmd_id);
+          if (body) { body.textContent += d.text; body.scrollTop = body.scrollHeight; }
+          break;
+        }
+        case 'cmd_done': {
+          const btn = document.getElementById('stopbtn-' + d.cmd_id);
+          if (btn) btn.style.display = 'none';
+          break;
+        }
       }
     };
   }
@@ -372,6 +474,150 @@ _HTML = """<!DOCTYPE html>
         .finally(() => { pending = false; });
     }, 100);  // 10 fps poll
   })();
+
+  // ---- Tab switching ----
+  function showTab(name) {
+    document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.getElementById('tab-' + name).classList.add('active');
+    document.querySelector('[data-tab="' + name + '"]').classList.add('active');
+    if (name === 'docs') loadDocsHistory();
+  }
+
+  // ---- Docs search ----
+  let docsAbort = null;
+
+  async function docsSearch() {
+    const inp = document.getElementById('docsInput');
+    const q = inp.value.trim();
+    if (!q) return;
+    const ansEl     = document.getElementById('docsAnswer');
+    const srcEl     = document.getElementById('docsSources');
+    const cmdsEl    = document.getElementById('docsCmds');
+    const diagWrap  = document.getElementById('docsDiagWrap');
+    const diagCont  = document.getElementById('docsDiagContent');
+    ansEl.style.color = '';
+    ansEl.innerHTML = '<span style="color:#8b949e">&#x23F3; Searching&#x2026;</span>';
+    srcEl.style.display = 'none';
+    cmdsEl.style.display = 'none';
+    diagWrap.style.display = 'none';
+    document.getElementById('cmdResults').innerHTML = '';
+    if (docsAbort) docsAbort.abort();
+    docsAbort = new AbortController();
+    try {
+      const resp = await fetch('/api/docs/search?q=' + encodeURIComponent(q),
+                               {signal: docsAbort.signal});
+      if (!resp.ok) { ansEl.textContent = '\u26a0 Error: ' + resp.status; return; }
+      const reader = resp.body.getReader();
+      const dec = new TextDecoder();
+      let buf = '', answer = '';
+      ansEl.innerHTML = '';
+      while (true) {
+        const {done, value} = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, {stream: true});
+        const lines = buf.split('\n');
+        buf = lines.pop();
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          const raw = line.slice(6);
+          if (raw === '[DONE]') continue;
+          try {
+            const ev = JSON.parse(raw);
+            if (ev.token !== undefined) {
+              answer += ev.token;
+              ansEl.innerHTML = mdRender(answer);
+            } else if (ev.diag !== undefined) {
+              diagCont.textContent = ev.diag;
+              diagWrap.style.display = 'block';
+            } else if (ev.sources !== undefined) {
+              srcEl.innerHTML = ev.sources.map(s =>
+                '<div class="docs-source">&#x1F4C4; ' + esc(s) + '</div>').join('');
+              srcEl.style.display = ev.sources.length ? 'block' : 'none';
+            } else if (ev.commands !== undefined) {
+              cmdsEl.innerHTML = ev.commands.map(c =>
+                '<button class="run-btn" onclick="runCmd(\'' +
+                c.id.replace(/\\/g,'\\\\').replace(/'/g,"\\'") + '\',\'' +
+                c.label.replace(/\\/g,'\\\\').replace(/'/g,"\\'") + '\')">' +
+                esc(c.label) + '</button>').join('');
+              cmdsEl.style.display = ev.commands.length ? 'flex' : 'none';
+            }
+          } catch(e) {}
+        }
+      }
+      loadDocsHistory();
+    } catch(e) {
+      if (e.name !== 'AbortError')
+        document.getElementById('docsAnswer').textContent = '\u26a0 ' + e.message;
+    }
+  }
+
+  // ---- History sidebar ----
+  async function loadDocsHistory() {
+    try {
+      const r = await fetch('/api/docs/history');
+      if (!r.ok) return;
+      const data = await r.json();
+      const el = document.getElementById('docsHistory');
+      el.innerHTML = '';
+      (data.entries || []).forEach(entry => {
+        const div = document.createElement('div');
+        div.className = 'docs-hist-item';
+        div.title = entry.query;
+        div.textContent = entry.query;
+        div.onclick = () => {
+          document.getElementById('docsInput').value = entry.query;
+          docsSearch();
+        };
+        el.appendChild(div);
+      });
+    } catch(e) {}
+  }
+
+  // ---- Command execution ----
+  function runCmd(id, label) {
+    if (!ws || ws.readyState !== 1) return;
+    ws.send(JSON.stringify({type: 'run_cmd', cmd_id: id}));
+    const res = document.getElementById('cmdResults');
+    let box = document.getElementById('cmdbox-' + id);
+    if (!box) {
+      box = document.createElement('div');
+      box.className = 'cmd-result';
+      box.id = 'cmdbox-' + id;
+      const safeId = id.replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+      box.innerHTML =
+        '<div class="cmd-result-hdr"><span>' + esc(label) + '</span>' +
+        '<button class="stop-btn" id="stopbtn-' + id +
+        '" onclick="stopCmd(\'' + safeId + '\')">&#x25FC; Stop</button></div>' +
+        '<div class="cmd-result-body" id="cmdbody-' + id + '"></div>';
+      res.appendChild(box);
+    } else {
+      const b = document.getElementById('cmdbody-' + id);
+      if (b) b.textContent = '';
+      const s = document.getElementById('stopbtn-' + id);
+      if (s) s.style.display = 'inline-block';
+    }
+  }
+
+  function stopCmd(id) {
+    if (ws && ws.readyState === 1)
+      ws.send(JSON.stringify({type: 'stop_cmd', cmd_id: id}));
+  }
+
+  // ---- Minimal markdown renderer ----
+  function mdRender(text) {
+    return text
+      .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+      .replace(/```[\\w]*\\n?([\\s\\S]*?)```/g,'<pre>$1</pre>')
+      .replace(/`([^`]+)`/g,'<code>$1</code>')
+      .replace(/\\*\\*([^*]+)\\*\\*/g,'<strong>$1</strong>')
+      .replace(/\\*([^*]+)\\*/g,'<em>$1</em>')
+      .replace(/^### (.+)$/gm,'<h3 style="color:#e6edf3;margin:8px 0 4px">$1</h3>')
+      .replace(/^## (.+)$/gm,'<h2 style="color:#e6edf3;margin:10px 0 4px">$1</h2>')
+      .replace(/^# (.+)$/gm,'<h1 style="color:#e6edf3;margin:12px 0 4px">$1</h1>')
+      .replace(/^[-*] (.+)$/gm,'\u2022 $1')
+      .replace(/\n/g,'<br>');
+  }
 </script>
 </body>
 </html>"""
@@ -391,6 +637,8 @@ class WebServer:
         self._clients: set = set()
         self._log_buffer: deque = deque(maxlen=100)
         self._voice_server = None
+        self._docs = DocsEngine()
+        self._cmd_procs: dict = {}  # cmd_id -> asyncio subprocess
 
     @property
     def tts_muted(self) -> bool:
@@ -408,6 +656,57 @@ class WebServer:
                 dead.add(ws)
         self._clients -= dead
 
+    async def _run_cmd_stream(self, ws, cmd_id: str, cmd_def: dict):
+        """Run an approved command and stream output back via WebSocket."""
+        _ROS2_SETUP = (
+            "source /opt/ros/jazzy/setup.bash && "
+            "source /home/pi/ros2_ws/install/setup.bash && "
+        )
+        full_cmd = _ROS2_SETUP + cmd_def["cmd"]
+        is_bg = cmd_def.get("background", False)
+
+        async def _send(payload: dict):
+            try:
+                await ws.send_text(json.dumps(payload))
+            except Exception:
+                pass
+
+        try:
+            proc = await asyncio.create_subprocess_shell(
+                full_cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+            )
+            self._cmd_procs[cmd_id] = proc
+
+            if is_bg:
+                while True:
+                    try:
+                        line = await asyncio.wait_for(proc.stdout.readline(), 0.5)
+                    except asyncio.TimeoutError:
+                        if proc.returncode is not None:
+                            break
+                        continue
+                    if not line:
+                        break
+                    await _send({"type": "cmd_output", "cmd_id": cmd_id,
+                                 "text": line.decode(errors="replace")})
+                await proc.wait()
+            else:
+                try:
+                    out, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
+                    await _send({"type": "cmd_output", "cmd_id": cmd_id,
+                                 "text": out.decode(errors="replace") or "(no output)"})
+                except asyncio.TimeoutError:
+                    await _send({"type": "cmd_output", "cmd_id": cmd_id,
+                                 "text": "\n(timed out after 30 s)"})
+        except Exception as e:
+            await _send({"type": "cmd_output", "cmd_id": cmd_id,
+                         "text": f"\n(error: {e})"})
+        finally:
+            self._cmd_procs.pop(cmd_id, None)
+            await _send({"type": "cmd_done", "cmd_id": cmd_id})
+
     async def start(self, voice_server):
         """Start the web server on the current asyncio event loop."""
         try:
@@ -422,6 +721,7 @@ class WebServer:
             return
 
         self._voice_server = voice_server
+        self._docs.startup()
         app = FastAPI()
 
         @app.get("/", response_class=HTMLResponse)
@@ -481,6 +781,61 @@ class WebServer:
             transcript = await self._voice_server.listen_for_answer(timeout=timeout)
             return {"transcript": transcript}
 
+        @app.get("/api/docs/search")
+        async def api_docs_search(q: str = ""):
+            """SSE stream: search docs, pull live diagnostics, stream LLM answer."""
+            from fastapi.responses import StreamingResponse as SR
+
+            async def generate():
+                query = q.strip()
+                if not query:
+                    yield "data: [DONE]\n\n"
+                    return
+
+                # Direct ROS2 read-only shortcut
+                ros2_cmd = self._docs.detect_ros2_query(query)
+                if ros2_cmd:
+                    result = await self._docs.run_ros2_query(ros2_cmd)
+                    token = f"```\n{result}\n```"
+                    yield f"data: {json.dumps({'token': token})}\n\n"
+                    yield "data: [DONE]\n\n"
+                    return
+
+                # Pull live diagnostics for fault queries
+                diag = ""
+                if self._docs.is_fault_query(query):
+                    diag = await self._docs.get_diagnostics()
+                    if diag:
+                        yield f"data: {json.dumps({'diag': diag})}\n\n"
+
+                chunks = self._docs.search(query)
+                sources = list(dict.fromkeys(c.path for c in chunks))
+
+                # Stream LLM tokens
+                answer_parts: list[str] = []
+                async for token in self._docs.stream_answer(query, chunks, diag):
+                    answer_parts.append(token)
+                    yield f"data: {json.dumps({'token': token})}\n\n"
+
+                answer = "".join(answer_parts)
+                if sources:
+                    yield f"data: {json.dumps({'sources': sources})}\n\n"
+                cmds = self._docs.relevant_commands(query, answer)
+                if cmds:
+                    yield f"data: {json.dumps({'commands': cmds})}\n\n"
+                self._docs.save_history(query, answer, sources)
+                yield "data: [DONE]\n\n"
+
+            return SR(
+                generate(),
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            )
+
+        @app.get("/api/docs/history")
+        async def api_docs_history():
+            return {"entries": self._docs.load_history(limit=20)}
+
         @app.post("/api/tts_mute")
         async def api_tts_mute(body: dict[str, Any]):
             self._tts_muted = bool(body.get("muted", False))
@@ -528,6 +883,21 @@ class WebServer:
                               self._voice_server._task_runner)
                         if tr:
                             tr.cancel()
+                    elif msg.get("type") == "run_cmd":
+                        cmd_id = msg.get("cmd_id", "").strip()
+                        cmd_def = self._docs.get_command(cmd_id)
+                        if cmd_def:
+                            asyncio.create_task(
+                                self._run_cmd_stream(websocket, cmd_id, cmd_def)
+                            )
+                    elif msg.get("type") == "stop_cmd":
+                        cmd_id = msg.get("cmd_id", "").strip()
+                        proc = self._cmd_procs.get(cmd_id)
+                        if proc:
+                            try:
+                                proc.terminate()
+                            except Exception:
+                                pass
                     elif msg.get("type") == "set_tts_mute":
                         self._tts_muted = bool(msg.get("muted", False))
                         await self.broadcast(
