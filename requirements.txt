@@ -1,6 +1,7 @@
 # Voice pipeline
 faster-whisper>=1.0.0
 piper-tts>=1.2.0
+pathvalidate>=3.0.0
 webrtcvad>=2.0.10
 # openwakeword: install with --no-deps (tflite-runtime unavailable on Python 3.12)
 # pip install openwakeword==0.6.0 --no-deps
