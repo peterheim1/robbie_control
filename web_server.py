@@ -152,12 +152,8 @@ _HTML = """<!DOCTYPE html>
 <div class="right-sidebar">
   <div class="cam-panel">
     <div class="panel-hdr">&#x1F4F7; Camera</div>
-    <img id="camFeed" class="cam-feed"
-         src="/camera/stream"
-         alt=""
-         onerror="camError()"
-         onload="document.getElementById('camNone').style.display='none'">
-    <div id="camNone" class="cam-none" style="display:none">No signal</div>
+    <img id="camFeed" class="cam-feed" alt="" style="display:none">
+    <div id="camNone" class="cam-none">No signal</div>
   </div>
   <div class="tasks-panel" id="tasksPanel">
     <div class="panel-hdr">&#x25B6; Tasks</div>
@@ -348,19 +344,34 @@ _HTML = """<!DOCTYPE html>
 
   loadTasks();
 
-  // ---- Camera feed ----
-  function camError() {
-    const img = document.getElementById('camFeed');
+  // ---- Camera feed (snapshot polling) ----
+  (function startCamPoll() {
+    const img  = document.getElementById('camFeed');
     const none = document.getElementById('camNone');
-    img.style.display = 'none';
-    none.style.display = 'flex';
-    // retry after 5s
-    setTimeout(() => {
-      img.style.display = 'block';
-      none.style.display = 'none';
-      img.src = '/camera/stream?' + Date.now();
-    }, 5000);
-  }
+    let pending = false;
+    setInterval(() => {
+      if (pending) return;
+      pending = true;
+      const url = '/camera/snapshot?' + Date.now();
+      fetch(url)
+        .then(r => {
+          if (r.status === 204) throw new Error('no frame');
+          return r.blob();
+        })
+        .then(blob => {
+          const old = img.src;
+          img.src = URL.createObjectURL(blob);
+          if (old && old.startsWith('blob:')) URL.revokeObjectURL(old);
+          img.style.display = 'block';
+          none.style.display = 'none';
+        })
+        .catch(() => {
+          img.style.display = 'none';
+          none.style.display = 'flex';
+        })
+        .finally(() => { pending = false; });
+    }, 100);  // 10 fps poll
+  })();
 </script>
 </body>
 </html>"""
@@ -432,21 +443,19 @@ class WebServer:
                 asyncio.create_task(self._voice_server.handle_text_command(text))
             return {"status": "ok"}
 
-        @app.get("/camera/stream")
-        async def camera_stream():
-            async def generate():
-                while True:
-                    dispatcher = (self._voice_server and
-                                  getattr(self._voice_server, '_dispatcher', None))
-                    frame = dispatcher.get_latest_camera_frame() if dispatcher else None
-                    if frame:
-                        yield (b"--frame\r\n"
-                               b"Content-Type: image/jpeg\r\n\r\n" +
-                               frame + b"\r\n")
-                    await asyncio.sleep(0.05)  # ~20 fps cap
-            return StreamingResponse(
-                generate(),
-                media_type="multipart/x-mixed-replace; boundary=frame",
+        @app.get("/camera/snapshot")
+        async def camera_snapshot():
+            """Return the latest camera frame as a single JPEG (polled by JS)."""
+            from fastapi.responses import Response
+            dispatcher = (self._voice_server and
+                          getattr(self._voice_server, '_dispatcher', None))
+            frame = dispatcher.get_latest_camera_frame() if dispatcher else None
+            if not frame:
+                return Response(status_code=204)  # No Content — JS treats as no signal
+            return Response(
+                content=frame,
+                media_type="image/jpeg",
+                headers={"Cache-Control": "no-store"},
             )
 
         @app.get("/api/tasks")
