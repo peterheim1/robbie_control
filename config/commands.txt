@@ -1,0 +1,75 @@
+# Robbie Voice Commands
+# Edit this file to change what Robbie responds to. Restart to reload.
+#
+# [command name]
+# phrases: phrase one, phrase two, ...    plain English, comma-separated
+# say:     spoken response
+# flags:   cancel_tasks                   optional — cancels any running task
+# ros:     type:topic  key=val ...        one or more publish actions
+#
+# ros types:
+#   none
+#   empty:/topic                              std_msgs/Empty
+#   twist:/topic                              geometry_msgs/Twist  (all zeros)
+#   joint_traj:/topic  joint1=rad joint2=rad  trajectory_msgs/JointTrajectory
+#   float64_array:/topic  values=v1,v2,...    std_msgs/Float64MultiArray
+
+# ---------------------------------------------------------------------------
+# Stop
+# ---------------------------------------------------------------------------
+[stop]
+phrases: stop, halt, freeze, stop everything, emergency stop
+say: stopping
+flags: cancel_tasks
+ros: empty:/voice/stop
+ros: twist:/cmd_vel
+ros: float64_array:/drive  values=0,0,0,0
+
+# ---------------------------------------------------------------------------
+# Head / look directions
+# ---------------------------------------------------------------------------
+[look right]
+phrases: look right, look to the right, turn your head right
+say: looking right
+ros: joint_traj:/head_controller/joint_trajectory  head_pan_joint=-1.0 head_tilt_joint=0.0
+
+[look left]
+phrases: look left, look to the left, turn your head left
+say: looking left
+ros: joint_traj:/head_controller/joint_trajectory  head_pan_joint=1.0 head_tilt_joint=0.0
+
+[look up]
+phrases: look up, tilt up, tilt your head up
+say: looking up
+ros: joint_traj:/head_controller/joint_trajectory  head_pan_joint=0.0 head_tilt_joint=0.5
+
+[look down]
+phrases: look down, tilt down, tilt your head down
+say: looking down
+ros: joint_traj:/head_controller/joint_trajectory  head_pan_joint=0.0 head_tilt_joint=-0.5
+
+[look forward]
+phrases: look forward, look straight, look ahead, look straight ahead
+say: looking forward
+ros: joint_traj:/head_controller/joint_trajectory  head_pan_joint=0.0 head_tilt_joint=0.0
+
+# ---------------------------------------------------------------------------
+# Docking
+# ---------------------------------------------------------------------------
+[dock]
+phrases: dock, go dock, start docking, go charge
+say: docking
+ros: srv_empty:/start_docking
+
+[undock]
+phrases: undock, leave the dock, undock yourself
+say: undocking
+ros: srv_empty:/undock
+
+# ---------------------------------------------------------------------------
+# Calibrate
+# ---------------------------------------------------------------------------
+[calibrate]
+phrases: calibrate, reset, cal
+say: resetting the steppers
+ros: srv_empty:/cal

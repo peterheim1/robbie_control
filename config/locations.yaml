@@ -1,0 +1,25 @@
+# Robbie Voice Control - Known Locations
+# Used by intent classifier for "go to <location>" commands.
+# Each location has a name, optional aliases, and coordinates.
+
+locations:
+  kitchen:
+    aliases: ["the kitchen"]
+    x: 0.0
+    y: 0.0
+  living_room:
+    aliases: ["living room", "the living room", "lounge"]
+    x: 0.0
+    y: 0.0
+  bedroom:
+    aliases: ["the bedroom", "bed room"]
+    x: 0.0
+    y: 0.0
+  dock:
+    aliases: ["the dock", "charging station", "charger", "home base"]
+    x: 0.0
+    y: 0.0
+  front_door:
+    aliases: ["front door", "the front door", "entrance"]
+    x: 0.0
+    y: 0.0

@@ -1,0 +1,71 @@
+# Robbie Voice Control - Server Configuration
+
+# Audio source: "local_mic" for desktop mic, "tcp" for ESP32 over WiFi
+audio_source: "local_mic"
+
+local_mic:
+  device: null                # null = PipeWire/PulseAudio default (AM4137 USB mic)
+  tts_device: null            # null = default output device
+  wake_word_model: "hey_jarvis"
+  wake_word_threshold: 0.85   # matches working example
+
+tcp_audio:
+  listen_host: "0.0.0.0"
+  listen_port: 8765
+  wake_word_model: "hey_jarvis"
+  wake_word_threshold: 0.5
+
+stt:
+  model: "small"                  # faster-whisper model: tiny, base, small, medium
+  language: "en"
+  device: "cpu"                   # cuda or cpu
+
+stop_detector:
+  model: "tiny"                   # fast model for stop keyword spotting
+  keywords: ["stop", "halt", "freeze", "emergency"]
+  max_audio_seconds: 0.5          # check first N seconds of audio
+
+tts:
+  model: "en_GB-alan-medium"      # British male voice (Jarvis-like)
+  speaker_id: null
+  output_sample_rate: 22050
+
+llm:
+  model: "mistral"                # Ollama model name
+  host: "http://10.0.0.87:11434"
+  system_prompt: |
+    You are Robbie, a home robot assistant with a warm, slightly formal British personality.
+    Give brief, conversational answers — 1 to 2 sentences maximum.
+    Always stay in character. Never describe yourself as an AI language model.
+  max_tokens: 120
+  backstory_file: "config/backstory.yaml"
+
+vad:
+  silence_threshold_ms: 1500      # silence duration to end recording
+  max_duration_ms: 5000           # hard timeout per utterance
+  aggressiveness: 3               # webrtcvad aggressiveness 0-3
+
+web:
+  enabled: true
+  host: "0.0.0.0"          # listen on all interfaces (LAN accessible)
+  port: 8090
+  tts_muted_default: false  # start with audio on
+
+tasks:
+  dir: "/home/pi/ros2_ws/src/robbie_control/tasks"   # directory containing *.txt task files
+
+wled:
+  enabled: true
+  host: "10.0.0.85"            # WLED segment bar IP
+  # idle = green, listening = magenta
+
+ros2:
+  node_name: "robbie_voice"
+  topics:
+    intent: "/voice/intent"
+    stop: "/voice/stop"
+    tts_text: "/voice/tts_text"
+    speak: "/voice/speak"        # Subscribe: external nodes publish String here to trigger TTS
+    cmd_vel: "/cmd_vel"
+    drive: "/drive"
+    head_position: "/head_controller/joint_trajectory"

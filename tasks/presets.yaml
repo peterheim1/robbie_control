@@ -1,0 +1,67 @@
+Pose 1:
+  head_yaw_joint: 1.0
+  right_j1_joint: 0.5
+Pose 2:
+  head_yaw_joint: -1.0
+  right_j1_joint: -0.5
+Pose 3:
+  left_j1_joint: 1.0
+  right_j5_joint: 0.8
+Pose 4:
+  ear_joint: 0.2
+Pose 5:
+  left_gripper_joint: 0.6
+  right_gripper_joint: 0.6
+default_pose:
+  ear_left_joint: 0.0
+  ear_right_joint: 0.0
+  head_pan_joint: 0.0
+  head_tilt_joint: 0.0
+  left_gripper: 0.0
+  left_joint_1: 1.57
+  left_joint_2: 0.25
+  left_joint_3: 0.0
+  left_joint_4: 0.0
+  left_joint_5: 0.0
+  left_joint_6: 0.0
+  right_gripper: 0.0
+  right_joint_1: 1.57
+  right_joint_2: -0.24
+  right_joint_3: 0.0
+  right_joint_4: 0.0
+  right_joint_5: 0.0
+  right_joint_6: 0.0
+driving:
+  ear_left_joint: -0.49
+  ear_right_joint: -0.47
+  head_pan_joint: 0.02
+  head_tilt_joint: 0.02
+  left_joint_1: 1.44
+  left_joint_2: 0.0
+  left_joint_3: 0.37
+  left_joint_4: 0.91
+  left_joint_5: 0.0
+  left_joint_6: 0.0
+  right_joint_1: 1.44
+  right_joint_2: 0.0
+  right_joint_3: -0.69
+  right_joint_4: -0.55
+  right_joint_5: 0.0
+  right_joint_6: 0.0
+netural:
+  ear_left_joint: 0.0
+  ear_right_joint: 0.0
+  head_pan_joint: 0.0
+  head_tilt_joint: 0.0
+  left_joint_1: 1.44
+  left_joint_2: 0.0
+  left_joint_3: 0.0
+  left_joint_4: 0.0
+  left_joint_5: 0.0
+  left_joint_6: 0.0
+  right_joint_1: 1.49
+  right_joint_2: 0.0
+  right_joint_3: 0.0
+  right_joint_4: 0.0
+  right_joint_5: 0.0
+  right_joint_6: 0.0

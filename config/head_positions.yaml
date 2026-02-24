@@ -1,0 +1,20 @@
+# Robbie Voice Control - Head/Camera Positions
+# Used by intent classifier for "look <direction>" commands.
+
+head:
+  positions:
+    forward:
+      pan: 0.0
+      tilt: 0.0
+    left:
+      pan: 1.0
+      tilt: 0.0
+    right:
+      pan: -1.0
+      tilt: 0.0
+    up:
+      pan: 0.0
+      tilt: -0.5
+    down:
+      pan: 0.0
+      tilt: 0.5

@@ -1,0 +1,13 @@
+NAV:TV
+TASK:MakeSound:Can I watch TV
+TASK:Wait
+NAV:Kitchen
+TASK:MakeSound:I'm Hungry can i get some oil
+TASK:Wait
+NAV:Dining
+TASK:MakeSound:Where is everyone
+TASK:Wait
+NAV:Foyer
+TASK:MakeSound:No mail today
+TASK:Wait
+NAV:Charging Station

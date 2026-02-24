@@ -1,0 +1,26 @@
+# Voice pipeline
+faster-whisper>=1.0.0
+piper-tts>=1.2.0
+webrtcvad>=2.0.10
+openwakeword>=0.6.0
+
+# LLM
+ollama>=0.3.0
+
+# Audio
+sounddevice>=0.4.6
+numpy>=1.24
+scipy>=1.11.0
+
+# ML runtime (faster-whisper / openwakeword backends)
+onnxruntime>=1.15.0
+
+# ESPHome TCP audio client
+aioesphomeapi>=18.0.0
+
+# Web interface
+fastapi>=0.111.0
+uvicorn>=0.29.0
+
+# Config / utils
+pyyaml>=6.0

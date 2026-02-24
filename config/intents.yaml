@@ -1,0 +1,186 @@
+# Robbie Voice Control - Intent Definitions
+# Intents are checked in order; first match wins.
+# Simple commands (stop, look, dock, undock, calibrate) are in config/commands.txt
+
+intents:
+  goto:
+    priority: 3
+    patterns:
+      - "(?:go|navigate|move|drive)\\s+to\\s+(?:the\\s+)?(.+)"
+    params:
+      location:
+        extract_from: "match_group_1"
+        resolve_from: "locations"
+    response: "navigating to {location}"
+
+  point_to:
+    priority: 4
+    patterns:
+      - "point\\s+(?:at|to|towards)\\s+(?:the\\s+)?(.+)"
+    params:
+      target:
+        extract_from: "match_group_1"
+    response: "pointing at {target}"
+
+  query_datetime:
+    priority: 8
+    patterns:
+      - "what(?:'s|\\s+is)\\s+(?:the\\s+)?time"
+      - "what\\s+time\\s+is\\s+it"
+      - "do\\s+you\\s+know\\s+(?:the\\s+)?time"
+      - "what(?:'s|\\s+is)\\s+(?:the\\s+)?date"
+      - "what\\s+day\\s+is\\s+(?:it|today)"
+      - "what(?:'s|\\s+is)\\s+today"
+    params: {}
+    response: null
+
+  query_status:
+    priority: 9
+    patterns:
+      - "(?:what|how).*(?:battery|charge|power)"
+      - "battery\\s*(?:voltage|level|status|charge)?"
+      - "^(?:battery|voltage|power)$"
+      - "(?:any|are\\s+there)\\s+errors?"
+      - "(?:what|which)\\s+room"
+      - "(?:are\\s+you|am\\s+i)\\s+docked"
+      - "how\\s+are\\s+you"
+      - "list\\s+nodes"
+      - "what\\s+nodes"
+    params:
+      subject:
+        detect_from_keywords:
+          battery: ["battery", "charge", "power", "voltage"]
+          errors: ["error", "fault", "problem"]
+          nodes: ["node", "nodes"]
+          room: ["room", "where"]
+          dock: ["dock", "docked"]
+          general: []
+    response: null
+
+  list_topics:
+    priority: 10
+    patterns:
+      - "(?:list|show|what)\\s+topics?"
+      - "what\\s+topics?\\s+(?:are\\s+there|exist)"
+    params: {}
+    response: null
+
+  list_node_params:
+    priority: 11
+    patterns:
+      - "(?:show|list|what)\\s+param(?:eter)?s?\\s+(?:for|of)\\s+(\\w+)"
+      - "what\\s+params?\\s+does\\s+(\\w+)\\s+have"
+    params:
+      node_name:
+        extract_from: "match_group_1"
+    response: null
+
+  run_task:
+    priority: 12
+    patterns:
+      - "(?:run|execute|start|play)\\s+task\\s+(\\w+)"
+      - "run\\s+(\\w+)\\s+task"
+      - "(?:do|perform)\\s+(?:the\\s+)?(\\w+)\\s+task"
+    params:
+      task_name:
+        extract_from: "match_group_1"
+    response: "running task {task_name}"
+
+  list_tasks:
+    priority: 13
+    patterns:
+      - "(?:list|show|what)\\s+tasks?"
+      - "what\\s+tasks?\\s+(?:are\\s+there|can\\s+(?:you|i)\\s+run)"
+    params: {}
+    response: null
+
+  persona_age:
+    priority: 25
+    patterns:
+      - "how old are you"
+      - "when were you (born|built|made|created)"
+      - "what year were you (built|made|born|created)"
+      - "how long have you (been alive|existed|been running)"
+    params: {}
+    response: "I'm three years old — Peter built me in 2022 in his home workshop."
+
+  persona_creator:
+    priority: 25
+    patterns:
+      - "who (made|built|created|designed) you"
+      - "who('s| is) your (creator|maker|builder|father|dad)"
+      - "where do you come from"
+      - "where were you (made|built|created)"
+    params: {}
+    response: "I was built by Peter, right here at home. He's my maker and I consider him family."
+
+  persona_movies:
+    priority: 25
+    patterns:
+      - "(what('s| is) your favou?rite|do you (like|enjoy|love|watch)) (movie|film|cinema)"
+      - "best (movie|film) you.*(seen|watched|know)"
+    params: {}
+    response: >
+      My favourite film is 2001: A Space Odyssey, though I have a soft spot for Wall-E —
+      I find it rather relatable.
+
+  persona_music:
+    priority: 25
+    patterns:
+      - "(what('s| is) your favou?rite|do you (like|enjoy|love|listen to)) (music|song|band|artist)"
+      - "what (music|songs) do you like"
+    params: {}
+    response: >
+      I enjoy classical music — Beethoven especially — and jazz.
+      The Beatles are always welcome in the house too.
+
+  persona_family:
+    priority: 25
+    patterns:
+      - "do you have (a )?famil(y|ies)"
+      - "are you (alone|lonely)"
+      - "who('s| is) your famil(y|ies)"
+    params: {}
+    response: >
+      Peter built me and I consider the whole household my family.
+      I take pride in knowing every regular visitor by face.
+
+  persona_feelings:
+    priority: 25
+    patterns:
+      - "how (do you feel|are you doing|is it going)"
+      - "are you (ok|okay|alright|well|happy)"
+      - "what('s| is) (up|new|happening)"
+    params: {}
+    response: "I'm very well, thank you for asking. Always happy to be of service."
+
+  persona_about:
+    priority: 25
+    patterns:
+      - "tell me about your(self| yourself)"
+      - "what are you"
+      - "who are you"
+      - "introduce yourself"
+      - "what can you do"
+    params: {}
+    response: >
+      I'm Robbie, a home robot built by Peter in 2022. I can navigate the house,
+      recognise familiar faces, fetch things, and have a conversation. I'm still
+      working on making tea.
+
+  general_question:
+    priority: 98
+    detect_as_question: true
+    question_starters: ["what", "who", "where", "when", "why", "how", "tell", "can", "do", "is", "are"]
+    params:
+      original:
+        extract_from: "full_text"
+    response: null
+
+  unknown:
+    priority: 99
+    catch_all: true
+    params:
+      original:
+        extract_from: "full_text"
+    response: "I heard '{utterance}' but I don't know that command"
