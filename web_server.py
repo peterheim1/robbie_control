@@ -516,7 +516,7 @@ _HTML = """<!DOCTYPE html>
         const {done, value} = await reader.read();
         if (done) break;
         buf += dec.decode(value, {stream: true});
-        const lines = buf.split('\n');
+        const lines = buf.split('\\n');
         buf = lines.pop();
         for (const line of lines) {
           if (!line.startsWith('data: ')) continue;
@@ -536,9 +536,9 @@ _HTML = """<!DOCTYPE html>
               srcEl.style.display = ev.sources.length ? 'block' : 'none';
             } else if (ev.commands !== undefined) {
               cmdsEl.innerHTML = ev.commands.map(c =>
-                '<button class="run-btn" onclick="runCmd(\'' +
-                c.id.replace(/\\/g,'\\\\').replace(/'/g,"\\'") + '\',\'' +
-                c.label.replace(/\\/g,'\\\\').replace(/'/g,"\\'") + '\')">' +
+                '<button class="run-btn" data-id="' + c.id +
+                '" data-label="' + esc(c.label) +
+                '" onclick="runCmd(this.dataset.id,this.dataset.label)">' +
                 esc(c.label) + '</button>').join('');
               cmdsEl.style.display = ev.commands.length ? 'flex' : 'none';
             }
@@ -584,11 +584,10 @@ _HTML = """<!DOCTYPE html>
       box = document.createElement('div');
       box.className = 'cmd-result';
       box.id = 'cmdbox-' + id;
-      const safeId = id.replace(/\\/g,'\\\\').replace(/'/g,"\\'");
       box.innerHTML =
         '<div class="cmd-result-hdr"><span>' + esc(label) + '</span>' +
         '<button class="stop-btn" id="stopbtn-' + id +
-        '" onclick="stopCmd(\'' + safeId + '\')">&#x25FC; Stop</button></div>' +
+        '" data-id="' + id + '" onclick="stopCmd(this.dataset.id)">&#x25FC; Stop</button></div>' +
         '<div class="cmd-result-body" id="cmdbody-' + id + '"></div>';
       res.appendChild(box);
     } else {
@@ -616,7 +615,7 @@ _HTML = """<!DOCTYPE html>
       .replace(/^## (.+)$/gm,'<h2 style="color:#e6edf3;margin:10px 0 4px">$1</h2>')
       .replace(/^# (.+)$/gm,'<h1 style="color:#e6edf3;margin:12px 0 4px">$1</h1>')
       .replace(/^[-*] (.+)$/gm,'\u2022 $1')
-      .replace(/\n/g,'<br>');
+      .replace(/\\n/g,'<br>');
   }
 </script>
 </body>
