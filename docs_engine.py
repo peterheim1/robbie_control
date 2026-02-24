@@ -261,6 +261,7 @@ class DocsEngine:
                     _ROS2_SETUP + cmd,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.DEVNULL,
+                    executable="/bin/bash",
                 )
                 out, _ = await asyncio.wait_for(proc.communicate(), timeout=4)
                 text = out.decode(errors="replace").strip()
@@ -280,6 +281,7 @@ class DocsEngine:
                 full,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
+                executable="/bin/bash",
             )
             out, _ = await asyncio.wait_for(proc.communicate(), timeout=8)
             return out.decode(errors="replace").strip() or "(no output)"

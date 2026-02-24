@@ -676,6 +676,7 @@ class WebServer:
                 full_cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
+                executable="/bin/bash",
             )
             self._cmd_procs[cmd_id] = proc
 
