@@ -207,20 +207,30 @@ class DocsEngine:
         context   = "\n\n---\n\n".join(c.as_context() for c in chunks)
         diag_part = f"\n\nLive diagnostics:\n{diagnostics}" if diagnostics else ""
         prompt = (
-            f"Documentation:\n{context}{diag_part}\n\n"
+            f"Documentation excerpts:\n{context}{diag_part}\n\n"
             f"Question: {query}\n\n"
-            f"Answer concisely. If suggesting a command, give the exact syntax."
+            f"Answer using ONLY the excerpts above. "
+            f"If the excerpts do not contain enough information to answer, "
+            f"say exactly what they do say and state clearly what is missing. "
+            f"Do NOT add information from outside the excerpts. "
+            f"If suggesting a command, copy it exactly from the documentation."
         )
         system = (
             "You are Robbie's technical assistant. "
-            "Answer using ONLY the provided documentation. "
-            "Be brief and practical. Cite sources as [file § section]."
+            "Your ONLY source of truth is the documentation excerpts provided in the prompt. "
+            "Never use knowledge from your training data. "
+            "If something is not in the excerpts, say so — do not guess or infer. "
+            "Cite sources as [file § section]."
         )
         payload = {
             "model":  self._model,
             "prompt": prompt,
             "system": system,
             "stream": True,
+            "options": {
+                "temperature": 0.1,   # low = factual, high = creative/hallucinatory
+                "num_predict": 400,   # cap response length to reduce drift
+            },
         }
         try:
             async with httpx.AsyncClient(timeout=60) as client:
