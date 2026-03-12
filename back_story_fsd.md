@@ -1,7 +1,8 @@
 # Robbie Backstory & Persona — Implementation FSD
 
-**Target system:** b9 — `/home/pi/ros2_ws/src/robbie_control/`
-**Reference:** `sst.fsd.md` for the HTTP API overview.
+**Target system:** robbie — `/home/pi/ros2_ws/src/robbie_control/`
+**Reference:** `stt_fsd.md` for the HTTP API overview.
+**Status:** Planning — persona intents not yet added to `intents.yaml`; backstory config not yet created.
 
 ---
 

@@ -29,6 +29,7 @@ voice pipeline from a separate computer.  Written for the meet-and-greet use cas
 │    POST /api/speak                                              │
 │    POST /api/listen                                             │
 │    POST /api/command                                            │
+│    POST /api/stop_all                                           │
 │    WS   /ws                                                     │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -171,10 +172,26 @@ without audio playing.
 
 ---
 
+### 2.5  POST `/api/stop_all`  — Emergency stop
+
+No body required. Immediately publishes stop signals:
+- `Empty` to `/voice/stop`
+- zero `Twist` to `/cmd_vel`
+- zero `Float64MultiArray` to `/drive`
+
+```bash
+curl -X POST http://10.0.0.x:8090/api/stop_all
+```
+
+---
+
 ## 3. WebSocket Event Stream  `ws://10.0.0.x:8090/ws`
 
 Connect to receive real-time pipeline events as JSON frames.  Useful for
 building a display panel or logging session activity.
+
+On connect, the server replays the last 100 buffered events so new connections
+see recent history.
 
 ### Event types
 
@@ -187,6 +204,9 @@ building a display panel or logging session activity.
 | `log`        | Server log line                   | `level`, `msg`                          |
 | `tts_mute`   | Mute state changed                | `muted`                                 |
 | `task_update`| Task runner step progress         | `task`, `step`, `running`               |
+| `battery`    | Battery voltage update            | `voltage` (float, volts)                |
+| `cmd_output` | Streaming ROS2 command output     | `cmd_id`, `text`                        |
+| `cmd_done`   | ROS2 command subprocess finished  | `cmd_id`                                |
 
 ### Send commands over WebSocket
 
@@ -226,27 +246,43 @@ Key fields: `on` (bool), `bri` (0-255), `seg[0].col[0]` = `[R, G, B]`.
 
 ## 5. Voice Pipeline Detail
 
-### 5.1 STT — Faster-Whisper
+### 5.1 Audio Input Modes
 
-- Model: `small` (on robot i7 CPU)
+| Mode | Config `audio_source` | Description |
+|---|---|---|
+| TCP (default) | `tcp` | ReSpeaker Lite (XIAO ESP32-S3) sends PCM over TCP |
+| Local mic | `local_mic` | USB mic directly on robot, openwakeword on-device |
+| Push-to-talk | `push_to_talk` | Press ENTER to speak (testing/debug) |
+
+### 5.2 STT — Faster-Whisper
+
+- Model: `small` (on robot CPU; `tiny` for speed, `medium` for accuracy)
 - Language: English, VAD filter enabled
 - Output: lowercase string, leading/trailing whitespace stripped
 - Audio: 16-bit PCM, 16 kHz, mono
 - Typical latency: 0.5–2 s depending on utterance length
 
-### 5.2 Wake Word — openwakeword
+### 5.3 Stop Detector (fast-path)
+
+A second STT instance (`tiny` model) checks the first ~0.5 s of audio for stop
+keywords before the full utterance finishes.  If triggered, publishes stop
+immediately and skips full STT.
+
+Keywords configurable in `config/voice_config.yaml` → `stop_detector.keywords`.
+
+### 5.4 Wake Word — openwakeword
 
 - Model: `hey_jarvis`
-- Threshold: `0.85`
+- Threshold: `0.85` (TCP mode: `0.5`)
 - The normal wake word pipeline is **bypassed** when you call `/api/listen`
 
-### 5.3 TTS — Piper
+### 5.5 TTS — Piper
 
 - Voice: `en_GB-alan-medium` (British male, Jarvis-style)
 - Output sample rate: 22050 Hz
 - Synthesis time: ~200 ms for a short sentence on CPU
 
-### 5.4 Intent Classification
+### 5.6 Intent Classification
 
 After STT, text is classified in this order:
 
@@ -261,6 +297,8 @@ After STT, text is classified in this order:
 | `query_status`   | "how are you"                        | Returns a status response          |
 | `query_datetime` | "what time is it"                    | Reads current time/date            |
 | `general_question` | "what is your name"               | Sent to Ollama LLM                 |
+| `system_status`  | "are there any errors"               | Reads /diagnostics via dispatcher  |
+| `run_task`       | "run first nav"                      | Starts a named task                |
 | `unknown`        | anything unmatched                   | "I don't know that command"        |
 
 Commands from `commands.txt`:
@@ -271,8 +309,8 @@ Commands from `commands.txt`:
 | `look right` | look right, turn your head right     | `/head_controller/joint_trajectory` |
 | `look left`  | look left, turn your head left       | same                                |
 | `look up/down/forward` | look up / down / forward   | same                                |
-| `dock`       | dock, go charge                      | `/start_docking`                    |
-| `undock`     | undock                               | `/undock`                           |
+| `dock`       | dock, go charge                      | `/start_docking` service            |
+| `undock`     | undock                               | `/undock` service                   |
 
 ---
 
@@ -365,11 +403,14 @@ else:
 | `POST /api/speak`      | 0.3 – 2 s (blocks until audio done) |
 | `POST /api/listen`     | 1 – 10 s (blocks until speech ends + STT) |
 | STT transcription      | 0.5 – 2 s after speech ends |
+| Stop detector fast-path | ~0.6 s from wake word to stop action |
 | WLED colour change     | < 50 ms             |
 | Wake word detection    | continuous background process |
 
 Set `urllib.request.urlopen` timeout to `timeout + 5` when calling
 `/api/listen` to give enough headroom for STT after the audio capture.
+
+Note: `/api/listen` acquires `_listen_lock` — only one listen session at a time.
 
 ---
 
@@ -377,13 +418,16 @@ Set `urllib.request.urlopen` timeout to `timeout + 5` when calling
 
 ```bash
 # On the robot
-cd /home/pi/ros2_ws/src/ai_test
-source robbie_control/.venv/bin/activate
+cd /home/pi/ros2_ws/src/robbie_control
+source venv/bin/activate
 python3 -m robbie_control.robbie_voice_server \
-    --config robbie_control/config/voice_config.yaml
+    --config config/voice_config.yaml
+
+# Or use the start script (also launches base driver + nav)
+~/robbie_start
 ```
 
-Web UI: `http://10.0.0.x:8090`
+Web UI: `http://robot-ip:8090`
 
 Config file: `robbie_control/config/voice_config.yaml`
 
@@ -411,9 +455,11 @@ web:
 
 | Symptom | Check |
 |---------|-------|
-| `/api/speak` returns connection refused | Voice server not running |
+| Connection refused on port 8090 | Voice server not running |
+| `/api/speak` returns quickly but no audio | Check TTS mute state (`/api/tts_mute {"muted": false}`) |
 | `/api/listen` returns empty transcript | No mic audio — check mic device in config, or background noise too quiet |
 | WLED not changing | Ping `10.0.0.85` — check WLED is on same network segment |
 | TTS plays but wrong voice | Check `tts.model` in `voice_config.yaml` and that the `.onnx` file exists in `models/piper/` |
-| `/api/listen` hangs past timeout | Increase `timeout` in request body; default VAD silence threshold is 1.5 s |
+| `/api/listen` hangs past timeout | Increase `timeout` in request body; only one listen at a time (`_listen_lock`) |
 | `/api/command` fires intent but no navigation | Destination must exist in `config/locations.yaml` |
+| Battery always shows `--.-V` in web UI | `/battery_voltage` not published — base_driver.py not running |

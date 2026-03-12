@@ -1,344 +1,303 @@
-# Robbie Web Interface — Functional Specification
+# Robbie Web Interface — Functional Specification (As-Built)
 
-**Date**: 2026-02-18
-**Status**: Planning / pre-implementation
-**Author**: Peter + Claude Code
+**Date**: 2026-03-12
+**Status**: Implemented
+**Port**: 8090
 
 ---
 
 ## 1. Purpose
 
-Add a browser-based control panel to the voice control server that runs alongside the existing pipeline. The web interface serves three goals:
+Browser-based control panel running alongside the voice pipeline. Serves three goals:
 
-1. **Testing** — type commands directly, bypassing wake word and STT, to test intent/ROS dispatch without speaking
-2. **Monitoring** — real-time pipeline log, status, errors visible from any device on the network
-3. **Situational awareness** — nav map with robot position (phase 2)
+1. **Testing** — type commands directly, bypassing wake word and STT
+2. **Monitoring** — real-time pipeline log, status, battery, and diagnostics
+3. **Documentation** — LLM-powered docs search with live diagnostics and runnable ROS2 commands
 
-Accessible from phone, tablet or laptop on the same network. No install required on the client.
-
----
-
-## 2. Non-Goals (out of scope for v1)
-
-- No authentication (LAN-only, trusted network assumed)
-- No video stream (separate concern)
-- No config editing via UI (use YAML files)
-- No React/Vue/Node build chain (single HTML file served by FastAPI)
+Accessible from phone, tablet, or laptop on the same network. No install required.
 
 ---
 
-## 3. Architecture — Hybrid (rosbridge + FastAPI), both on robot
+## 2. Architecture
 
-Everything runs on the **robot i7**. SLAM and navigation run locally — the web UI only subscribes to topics and does not affect control loop timing.
+Everything runs on the robot. No rosbridge required — all ROS2 data is fed through
+`ROS2Dispatcher` which subscribes to topics in a background thread and pushes state
+to the web layer via WebSocket events.
 
 ```
-ROBOT i7
+ROBOT (Pi / i7)
   ├── robbie_voice_server.py
-  │     └── FastAPI WebServer (port 8080)
-  │           - serves index.html
-  │           - WS: pipeline status, log stream, TTS mute
-  │           - POST /api/command: text injection
+  │     └── WebServer (FastAPI, port 8090)
+  │           - serves single-page HTML
+  │           - WebSocket: /ws  (pipeline events, commands, cmd streaming)
+  │           - REST: /api/*
   │
-  └── rosbridge_suite (port 9090)
-        - /map  (throttled to 0.2 Hz — enough for display, low WiFi cost)
-        - /odom or /amcl_pose  (5 Hz — robot position)
-        - /voice/intent, /voice/tts_text  (already ROS topics)
+  └── ROS2Dispatcher (background rclpy spin thread)
+        - subscribes /battery_voltage, /diagnostics, /oak/rgb/image_raw/compressed
+        - spin thread auto-restarts on exception (_spinning flag + retry loop)
 
-WiFi (one link, shared)
-  └── Browser (phone / laptop / desktop)
-        ├── ws://robot-ip:8080  — voice events, commands, log
-        └── ws://robot-ip:9090  — ROS topics (map, pose)
+Browser (phone / laptop)
+  └── ws://robot-ip:8090/ws  ─── all data, no rosbridge needed
 ```
 
-### Why on the robot (not desktop)
+---
 
-- **No audio over WiFi** — mic is USB-direct on robot, audio never leaves the machine
-- **ROS 2 publishing is local** — cmd_vel, /head/position published on-machine, zero network hop
-- **/map is published on robot** — rosbridge subscribes locally, no extra DDS hop
-- **Nav timing unaffected** — web UI is read-only subscriber; ROS 2 pub/sub is decoupled
-- **Self-contained** — robot works without desktop being on
+## 3. HTTP API Reference
 
-### WiFi traffic estimate
+All endpoints accept/return JSON unless noted. No authentication.
 
-| Source | Rate | Notes |
+| Endpoint | Method | Description |
 |---|---|---|
-| FastAPI voice events | ~2 KB/s | JSON events, negligible |
-| rosbridge /map | ~50–200 KB per update × 0.2 Hz = ~10–40 KB/s | throttle in rosbridge config |
-| rosbridge /odom | ~0.5 KB/s | tiny pose messages |
-| Existing nav/SLAM topics to desktop | already present | not added by web UI |
+| `/` | GET | Single-page HTML |
+| `/api/command` | POST | Inject text command (full pipeline: intent → ROS2 → TTS) |
+| `/api/speak` | POST | Speak text directly via TTS, bypassing intent classification |
+| `/api/listen` | POST | Capture a spoken answer (no wake word required), returns transcript |
+| `/api/tts_mute` | POST | Set TTS mute state `{"muted": true/false}` |
+| `/api/stop_all` | POST | Stop all robot motion immediately (publishes stop to /voice/stop, /cmd_vel, /drive) |
+| `/api/shutdown` | POST | Shutdown the Raspberry Pi (`sudo shutdown -h now`) |
+| `/api/tasks` | GET | List available task names |
+| `/camera/snapshot` | GET | Latest OAK-D JPEG frame (polled by JS at ~2 Hz), 204 if no signal |
+| `/api/docs/search?q=` | GET (SSE) | Search docs + stream LLM answer tokens; live /diagnostics for fault queries |
+| `/api/docs/history` | GET | Last 20 query/answer entries |
+| `/ws` | WebSocket | Bidirectional: events out + commands + cmd execution in |
 
-Map throttling config in rosbridge launch:
-```xml
-<param name="max_message_size" value="10000000"/>
-<param name="fragment_timeout" value="600"/>
-<!-- throttle /map to 0.2 Hz via roslibjs on client side -->
+### POST `/api/command`
+```json
+{ "text": "go to the kitchen" }
+→ { "status": "ok" }
+```
+Fire-and-forget. Full pipeline runs asynchronously.
+
+### POST `/api/speak`
+```json
+{ "text": "Hello, welcome!" }
+→ { "status": "ok" }
+```
+Blocks until audio finishes playing (synchronous).
+
+### POST `/api/listen`
+```json
+{ "timeout": 10.0 }
+→ { "transcript": "my name is john" }
+```
+Starts recording without wake word. WLED → magenta while listening. Blocks until
+Whisper finishes (timeout + STT latency). Returns `""` on silence.
+
+### POST `/api/stop_all`
+No body. Calls `dispatcher.publish_stop()` — publishes Empty to `/voice/stop`,
+zero Twist to `/cmd_vel`, zero Float64MultiArray to `/drive`.
+
+### GET `/api/docs/search` (SSE)
+Streams JSON-encoded tokens:
+```
+data: {"token": "The base driver..."}\n\n
+data: {"diag": "base_driver: OK\nbattery: 12.4V"}\n\n   ← fault queries only
+data: {"sources": ["robbie_bot/fsd.md", ...]}\n\n
+data: {"commands": [{"id": "health", "label": "ros2 topic echo /health_summary", ...}]}\n\n
+data: [DONE]\n\n
+```
+Recognized ROS2 shortcut queries (`list nodes`, `list topics`, `list controllers`, etc.)
+skip LLM and return direct `ros2` command output.
+
+---
+
+## 4. WebSocket Protocol
+
+Connect: `ws://robot-ip:8090/ws`
+
+On connect: server replays last 100 buffered events so new tabs see history.
+
+### Events — server → browser
+
+| `type` | Key fields | Meaning |
+|---|---|---|
+| `status` | `state` | Pipeline state: `listening / recording / processing / speaking / disconnected` |
+| `transcript` | `text`, `source` | STT result or injected text (`voice / web / listen`) |
+| `intent` | `name`, `params`, `response` | Classified intent |
+| `tts` | `text`, `muted` | TTS about to play (or suppressed) |
+| `tts_mute` | `muted` | Mute state changed (sync all clients) |
+| `log` | `level`, `msg` | Server log line |
+| `task_update` | `task`, `step`, `running` | Task runner step progress |
+| `battery` | `voltage` | Battery voltage push (on connect if cached, then every 10 s) |
+| `cmd_output` | `cmd_id`, `text` | Streaming subprocess output (Docs tab) |
+| `cmd_done` | `cmd_id` | Subprocess finished |
+
+### Commands — browser → server
+
+```json
+{ "type": "command",      "text": "stop" }
+{ "type": "run_task",     "name": "first_nav" }
+{ "type": "cancel_task"                       }
+{ "type": "set_tts_mute", "muted": true       }
+{ "type": "run_cmd",      "cmd_id": "health"  }   ← executes ROS2 command from Docs tab
+{ "type": "stop_cmd",     "cmd_id": "health"  }   ← kills the subprocess
 ```
 
-### Starting rosbridge
+---
+
+## 5. Frontend Layout
+
+Single-page HTML, vanilla JS, no framework. Two tabs: **Control** and **Docs**.
+
+### Header (all tabs)
+```
+🤖 ROBBIE   [● LISTENING]   [⏹ Stop All] [⏻ Shutdown] [🔇 Silent ─●]
+```
+
+### Info bar (Control tab)
+```
+HH:MM:SS  |  📍 Perth, 24°C  |  🔋 12.4V
+```
+Battery colour coding: `#3fb950` (≥11.5V), `#e3b341` (10.5–11.5V low), `#f85149` (<10.5V critical).
+
+### Control tab layout
+```
+┌──────────────────────────────────┐  ┌─────────────────┐
+│ Command input + Send button      │  │ 📷 Camera        │
+├──────────────────────────────────┤  │ (JPEG polled 2Hz)│
+│ Last Interaction                 │  ├─────────────────┤
+│  Heard:    "look right"          │  │ ▶ Tasks          │
+│  Intent:   look                  │  │ first_nav        │
+│  Response: "looking right"       │  │ meet_greet       │
+├──────────────────────────────────┤  │ [✗ Cancel]       │
+│ Live Log (300px scrollable)      │  │                  │
+│  19:36:50 HEAR  "look right"     │  │                  │
+│  19:36:50 INTENT look dir=right  │  │                  │
+└──────────────────────────────────┘  └─────────────────┘
+```
+
+### Docs tab layout
+```
+┌─ History ─┐  ┌──────────────────────────────────────────┐
+│ prev query │  │ [ Ask anything...              ] [Ask]   │
+│ prev query │  │                                          │
+│ ...        │  │ ⚡ Live Diagnostics (fault queries only) │
+│            │  │                                          │
+│            │  │ LLM answer streamed here...              │
+│            │  │                                          │
+│            │  │ Sources: fsd.md, CLAUDE.md              │
+│            │  │ [▶ list topics] [▶ list controllers]    │
+│            │  │                                          │
+│            │  │ $ ros2 topic list                       │
+│            │  │ /battery_voltage...  [✗ Stop]            │
+└────────────┘  └──────────────────────────────────────────┘
+```
+
+---
+
+## 6. Status Badge Colours
+
+| State | Colour | Meaning |
+|---|---|---|
+| `disconnected` | Amber | WebSocket not connected |
+| `listening` | Green | Idle, waiting for wake word |
+| `recording` | Red | Capturing speech |
+| `processing` | Blue | STT + intent running |
+| `speaking` | Purple | TTS active |
+
+---
+
+## 7. TTS Mute
+
+Server-side flag (`WebServer._tts_muted`). When muted:
+- `_speak()` in voice server skips `send_tts_audio()` but always emits `tts` event
+- Browser shows response text with a 🔇 badge
+- Toggle broadcasts `tts_mute` event to sync all open tabs
+- Silent toggle in header uses a CSS slider
+
+---
+
+## 8. Camera Feed
+
+- Source: `/oak/rgb/image_raw/compressed` (OAK-D Lite)
+- JS polls `/camera/snapshot` every 500 ms using `<img>` element
+- Server returns 204 (No Content) if no frame available → "No signal" placeholder shown
+- Frame cached in `ROS2Dispatcher._latest_camera_frame` (set from rclpy spin thread)
+
+---
+
+## 9. Task Runner Integration
+
+- `GET /api/tasks` — returns list of `.yaml` task files in `tasks/` dir
+- Tasks visible in right sidebar; click to run via WebSocket `run_task` message
+- Running task highlighted green with step description
+- `task_update` event updates sidebar in real time
+- Cancel button sends `cancel_task` WebSocket message
+
+---
+
+## 10. Docs Engine (`docs_engine.py`)
+
+- Indexes all `.md` and `CLAUDE.md` files in the workspace at startup
+- Vector search using TF-IDF + cosine similarity
+- LLM answer streamed via SSE from Ollama (same model as voice server)
+- Recognized ROS2 shortcut queries bypass LLM entirely (whitelist of safe read-only commands)
+- Fault queries (`error`, `not working`, `why`, etc.) pull live `/diagnostics` output first
+- Relevant commands extracted from answer text and shown as runnable buttons
+- History persisted to `data/docs_history.json`
+
+---
+
+## 11. ROS2 Dispatcher (`ros2_dispatcher.py`)
+
+Key design points:
+- `rclpy.spin()` runs in a daemon background thread (`ros2_spin`)
+- **Spin restart loop**: if `rclpy.spin()` raises, logs warning and retries after 1 s (prevents silent death of all callbacks)
+- `_spinning` flag ensures clean shutdown without spurious restart
+- Subscriptions: `/battery_voltage` (Float32), `/diagnostics` (DiagnosticArray), `/oak/rgb/image_raw/compressed` (CompressedImage), `/voice/speak` (String → TTS callback)
+- Dynamic publishers created on first use (keyed by `(msg_type, topic)`)
+- `navigate_to(x, y, yaw_deg)` sends Nav2 `NavigateToPose` action goal in a daemon thread
+
+---
+
+## 12. Running the Voice Server
 
 ```bash
-# Install once on robot
-sudo apt install ros-jazzy-rosbridge-suite
+# On the robot
+cd /home/pi/ros2_ws/src/robbie_control
+source venv/bin/activate
+python3 -m robbie_control.robbie_voice_server \
+    --config config/voice_config.yaml
 
-# Start (add to launch file alongside voice server)
-ros2 launch rosbridge_server rosbridge_websocket_launch.xml
+# Or use the system start script
+~/robbie_start
 ```
 
----
+Web UI: `http://robot-ip:8090`
 
-## 4. Components
-
-### 4.1 WebServer (`robbie_control/web_server.py`)
-
-FastAPI app sharing the existing asyncio event loop:
-
-```python
-class WebServer:
-    def __init__(self, host="0.0.0.0", port=8080):
-        self._tts_muted = False      # server-side TTS mute flag
-        self._clients = set()        # connected WebSocket clients
-        self._log_buffer = deque(maxlen=100)  # last 100 lines for new connections
-
-    async def start(self, voice_server):
-        # voice_server ref for handle_text_command() and tts_muted property
-
-    async def broadcast(self, event: dict):
-        # push JSON event to all connected WS clients
-```
-
-Endpoints:
-
-| Endpoint | Method | Purpose |
-|---|---|---|
-| `/` | GET | Serve the single-page HTML |
-| `/api/command` | POST | Inject text command into pipeline |
-| `/api/tts_mute` | POST | Set TTS mute state `{"muted": true/false}` |
-| `/ws` | WebSocket | Bidirectional: events out, commands + settings in |
-
-### 4.2 Event Bus
-
-`robbie_voice_server.py` gains a `publish_event(event: dict)` method:
-
-```python
-# Events pushed to web clients:
-{"type": "status",     "state": "listening"}           # idle, watching for wake word
-{"type": "status",     "state": "recording"}           # capturing speech
-{"type": "status",     "state": "processing"}          # STT + intent running
-{"type": "status",     "state": "speaking"}            # TTS playing (if not muted)
-{"type": "transcript", "text": "look right"}           # STT result
-{"type": "intent",     "name": "look", "params": {...}, "response": "looking right"}
-{"type": "tts",        "text": "looking right",        # what robot said/would say
-                       "muted": false}
-{"type": "log",        "level": "info",  "msg": "..."}
-{"type": "log",        "level": "error", "msg": "..."}
-{"type": "tts_mute",   "muted": true}                  # mute state changed (sync all clients)
-```
-
-### 4.3 TTS Mute Toggle
-
-A toggle in the browser that suppresses audio playback server-side — the robot stays silent but the response text is still shown on screen.
-
-**Server side:**
-- `WebServer._tts_muted` bool, defaulting to `False`
-- Exposed as a property on the voice server: `voice_server.tts_muted`
-- Before calling `send_tts_audio()`, the pipeline checks this flag:
-  ```python
-  if not self._web_server or not self._web_server.tts_muted:
-      await self._esphome.send_tts_audio(audio)
-  # Always publish event so UI shows the text regardless
-  await self.publish_event({"type": "tts", "text": tts_text, "muted": self._web_server.tts_muted})
-  ```
-- When browser sends mute toggle, server broadcasts `{"type": "tts_mute", "muted": true}` to all clients so every browser stays in sync
-
-**Client side:**
-- Toggle switch (checkbox styled as a slider) labelled **"Silent mode"**
-- When muted: TTS response text shown in a highlighted box; speaker icon shows crossed-out
-- When unmuted: normal behaviour
-
-### 4.4 Text Command Injection
-
-New method in `RobbieVoiceServer`:
-
-```python
-async def handle_text_command(self, text: str):
-    """Inject text directly into pipeline, bypassing wake word and STT."""
-    await self.publish_event({"type": "transcript", "text": text, "source": "web"})
-    # then same path as post-STT:
-    # classify → dispatch ROS 2 → TTS (respects mute flag)
-```
-
-### 4.5 Frontend (embedded single-page HTML)
-
-Vanilla JS, no framework. Responsive. Connects to both WebSockets on page load.
-
-**Layout:**
-
-```
-┌─────────────────────────────────────────────────┐
-│  🤖 ROBBIE          [● LISTENING]               │
-│                                      [🔇 Silent] │ ← toggle switch
-├─────────────────────────────────────────────────┤
-│                                                 │
-│  ┌─ Type a Command ────────────────────────┐   │
-│  │  [ look left                   ] [Send] │   │
-│  └─────────────────────────────────────────┘   │
-│                                                 │
-│  ┌─ Last Interaction ──────────────────────┐   │
-│  │  Heard:    "look right"                 │   │
-│  │  Intent:   look → pan=-1.2  tilt=0.0    │   │
-│  │  Response: "looking right"   🔇 (muted) │   │ ← shows muted badge if silent
-│  └─────────────────────────────────────────┘   │
-│                                                 │
-│  ┌─ Live Log ──────────────────────────────┐   │
-│  │  19:36:50  HEAR   "look right."         │   │
-│  │  19:36:50  INTENT look dir=right        │   │
-│  │  19:36:50  TTS    "looking right" 🔇    │   │
-│  │  19:36:51  [listening]                  │   │
-│  └─────────────────────────────────────────┘   │
-│                                                 │
-│  ┌─ Nav Map (rosbridge / phase 2) ─────────┐   │
-│  │                                         │   │
-│  │   [canvas — occupancy grid + robot]     │   │
-│  │                                         │   │
-│  └─────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────┘
-```
-
-**Status indicator colours:**
-- Grey: idle / listening for wake word
-- Amber: recording speech
-- Blue: processing (STT / intent)
-- Green: speaking (TTS active)
-- Green + 🔇: processing complete, TTS muted (text shown only)
-- Red: error
-
----
-
-## 5. Nav Map Viewer (Phase 2 — via rosbridge)
-
-The browser uses `roslibjs` + `nav2djs` (standard ROS JS libraries, loaded from CDN) to connect to rosbridge on port 9090 and subscribe directly to:
-
-- `/map` (`nav_msgs/OccupancyGrid`) — occupancy grid, rendered on canvas
-- `/amcl_pose` or `/odom` — robot position + heading (blue arrow overlay)
-- `/move_base_simple/goal` — current nav goal (red dot)
-
-No custom server-side serialization needed — rosbridge handles it.
-
-```html
-<script src="https://cdn.jsdelivr.net/npm/roslib/build/roslib.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/nav2djs/build/nav2d.min.js"></script>
-```
-
----
-
-## 6. Config
-
-Add to `robbie_control/config/voice_config.yaml`:
-
+Key config (`config/voice_config.yaml`):
 ```yaml
 web:
   enabled: true
-  host: "0.0.0.0"        # listen on all interfaces
-  port: 8080
-  tts_muted_default: false   # start with audio on
-  rosbridge_port: 9090    # for frontend JS to connect to
+  host: "0.0.0.0"
+  port: 8090
+
+wled:
+  enabled: true
+  host: "10.0.0.85"
 ```
 
 ---
 
-## 7. Dependencies
+## 13. Dependencies
 
-**Python** — add to `requirements.txt`:
+**Python** (in `requirements.txt`):
 ```
 fastapi>=0.111.0
 uvicorn>=0.29.0
 ```
 
-**System** — install once on robot:
-```bash
-sudo apt install ros-jazzy-rosbridge-suite
-```
-
-**Browser** — loaded from CDN, no install:
-- `roslibjs` — ROS WebSocket client
-- `nav2djs` — map rendering (phase 2 only)
+**System**: none beyond what voice server already needs.
 
 ---
 
-## 8. Implementation Phases
+## 14. Troubleshooting
 
-### Phase 1 — Text bypass + live log + TTS mute (MVP)
-**Goal**: Test intent/ROS from browser without speaking. Silence robot on demand.
-
-1. Create `robbie_control/web_server.py` — FastAPI + WebSocket + TTS mute flag
-2. Add `web_server` startup to `robbie_voice_server.py`
-3. Add `publish_event()` calls at key pipeline steps
-4. Add TTS mute check before `send_tts_audio()` in pipeline
-5. Add `handle_text_command()` to `RobbieVoiceServer`
-6. Embed single-page HTML: command input, silent toggle, status badge, log stream
-7. Add `web:` section to `voice_config.yaml`
-
-Deliverable: `http://robot-ip:8080` — type commands, see log, toggle silent mode.
-
-### Phase 2 — Nav map (rosbridge)
-**Goal**: Live map with robot position from any browser.
-
-1. Install `ros-jazzy-rosbridge-suite`
-2. Add rosbridge to launch file alongside voice server
-3. Add map canvas + roslibjs + nav2djs to the HTML page
-4. Subscribe to `/map` + `/amcl_pose` via rosbridge WebSocket
-
-Deliverable: Map panel visible below the log, robot position updates in real time.
-
-### Phase 3 — Quick-command buttons + history (nice to have)
-- Quick-tap buttons: Stop, Dock, Look Forward, Go Home
-- Last N interactions shown on page load (from server-side buffer)
-- Mobile-optimised large tap targets
-
----
-
-## 9. Integration Points in Existing Code
-
-| File | Change |
+| Symptom | Check |
 |---|---|
-| `robbie_voice_server.py` | Start WebServer; add `publish_event()` calls; add `handle_text_command()`; check `tts_muted` before audio playback |
-| `config/voice_config.yaml` | Add `web:` section |
-| `requirements.txt` | Add fastapi, uvicorn |
-
-No changes needed to: `local_mic_client.py`, `stt_engine.py`, `intent_classifier.py`, `tts_engine.py`, `ros2_dispatcher.py`
-
----
-
-## 10. Example Flows
-
-### Text command (silent mode on)
-```
-User types "go forward" + clicks Send
-  → POST /api/command {"text": "go forward"}
-  → handle_text_command("go forward")
-    → publish_event({"type":"transcript", "text":"go forward", "source":"web"})
-    → intent_classifier.classify() → drive intent
-    → dispatcher.publish(intent)          ← ROS 2 publishes normally
-    → tts.synthesize("moving forward")    ← generates audio
-    → tts_muted == True → skip send_tts_audio()
-    → publish_event({"type":"tts", "text":"moving forward", "muted":true})
-  → Browser shows: Response: "moving forward" 🔇
-```
-
-### Silent mode toggle
-```
-User clicks Silent toggle ON
-  → WS message: {"type":"set_tts_mute", "muted": true}
-  → server._tts_muted = True
-  → broadcast to all clients: {"type":"tts_mute", "muted": true}
-  → all browser tabs update their toggle to ON
-```
-
----
-
-## 11. Open Questions
-
-1. **uvicorn loop sharing**: share the asyncio loop using `config.setup()` + `asyncio.create_task(server.serve())`. Needs testing with sounddevice callbacks running simultaneously.
-2. **Map data size**: `nav_msgs/OccupancyGrid` for a large map can be several MB. rosbridge streams it natively — may need to throttle updates (e.g. 1 Hz for map, 5 Hz for pose).
-3. **Multiple clients + mute**: mute state is server-global. If two browsers are open and one mutes, both reflect the muted state. This is intentional — the robot either speaks or doesn't.
-4. **Wake word while silent**: microphone and wake word still active. User can still say "hey Jarvis" — the response text appears but no audio plays.
+| Connection refused on port 8090 | Voice server not running; check `~/robbie_start` |
+| Battery shows `--.-V` | `/battery_voltage` not published — is `base_driver.py` running? |
+| Camera shows "No signal" | OAK-D not publishing `/oak/rgb/image_raw/compressed` |
+| Docs tab answers are stale | `docs_engine.py` indexes at startup; restart server after adding `.md` files |
+| Stop All doesn't stop motion | ROS2 dispatcher spin may have failed — check server logs |
+| `/api/listen` hangs | Check mic device; `listen_for_answer` acquires `_listen_lock` (one at a time) |
