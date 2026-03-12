@@ -49,7 +49,7 @@ say: looking down
 ros: joint_traj:/head_controller/joint_trajectory  head_pan_joint=0.0 head_tilt_joint=-0.5
 
 [look forward]
-phrases: look forward, look straight, look ahead, look straight ahead
+phrases: look forward, look front, look straight, look ahead, look straight ahead
 say: looking forward
 ros: joint_traj:/head_controller/joint_trajectory  head_pan_joint=0.0 head_tilt_joint=0.0
 

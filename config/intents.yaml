@@ -34,6 +34,17 @@ intents:
     params: {}
     response: null
 
+  system_status:
+    priority: 8
+    patterns:
+      - "(?:system|robot)\\s+status"
+      - "(?:any|check\\s+for|are\\s+there\\s+any)\\s+(?:system\\s+)?errors?"
+      - "check\\s+(?:system\\s+)?health"
+      - "(?:what|how).*(?:system|health)\\s+(?:status|errors?)"
+      - "(?:run|do)\\s+a\\s+(?:health|system)\\s+check"
+    params: {}
+    response: null
+
   query_status:
     priority: 9
     patterns:

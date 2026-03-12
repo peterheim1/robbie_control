@@ -3,8 +3,12 @@
 import asyncio
 import dataclasses
 import json
+import logging
+import math
 import threading
 from datetime import datetime
+
+logger = logging.getLogger(__name__)
 
 import rclpy
 from rclpy.node import Node
@@ -13,6 +17,7 @@ from geometry_msgs.msg import Twist
 from sensor_msgs.msg import CompressedImage
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 from builtin_interfaces.msg import Duration
+from diagnostic_msgs.msg import DiagnosticArray
 
 from robbie_control.intent_classifier import Intent
 
@@ -82,24 +87,32 @@ class ROS2Dispatcher:
         self._battery_percentage: float | None = None
         self._battery_voltage: float | None = None
         self._is_docked: bool | None = None
+        self._diagnostic_errors: list[str] = []
 
         self._sub_battery = self._node.create_subscription(
             Float32, "/battery_voltage", self._on_battery_voltage, 10)
+        self._sub_diagnostics = self._node.create_subscription(
+            DiagnosticArray, "/diagnostics", self._on_diagnostics, 10)
 
         # Dynamic publishers and service clients created on demand
         self._dynamic_pubs: dict = {}
         self._service_clients: dict = {}
 
         # Spin in background thread
+        self._spinning = True
         self._spin_thread = threading.Thread(
             target=self._spin, daemon=True, name="ros2_spin")
         self._spin_thread.start()
 
     def _spin(self):
-        try:
-            rclpy.spin(self._node)
-        except Exception:
-            pass
+        import time
+        while self._spinning:
+            try:
+                rclpy.spin(self._node)
+            except Exception as e:
+                if self._spinning:
+                    logger.warning(f"ROS2 spin error: {e}, restarting in 1s")
+                    time.sleep(1)
 
     def set_speak_callback(self, callback, loop: asyncio.AbstractEventLoop):
         """Register the async TTS callback invoked when /voice/speak is received.
@@ -171,12 +184,69 @@ class ROS2Dispatcher:
         msg.points = [pt]
         self._pub_head.publish(msg)
 
+    # Diagnostic items to silently ignore (name substring match, lower-case)
+    _DIAG_IGNORE = ("wdog", "watchdog", "high jitter", "high_jitter")
+
+    def _on_diagnostics(self, msg: DiagnosticArray):
+        """Cache error/warn statuses from /diagnostics, excluding ignored checks."""
+        errors = []
+        for status in msg.status:
+            name_lc = status.name.lower()
+            if any(ig in name_lc for ig in self._DIAG_IGNORE):
+                continue
+            # DiagnosticStatus levels: 0=OK, 1=WARN, 2=ERROR, 3=STALE
+            # rclpy may return byte fields as bytes or int depending on version
+            level = status.level[0] if isinstance(status.level, (bytes, bytearray)) else int(status.level)
+            if level >= 1:
+                label = "ERROR" if level >= 2 else "WARN"
+                errors.append(f"{status.name}: {status.message} [{label}]")
+        self._diagnostic_errors = errors
+
+    def get_system_errors(self) -> list[str]:
+        """Return cached diagnostic errors (wdog and high jitter excluded)."""
+        return list(self._diagnostic_errors)
+
     def _on_battery_voltage(self, msg: Float32):
         self._battery_voltage = float(msg.data)
 
     def get_battery_voltage(self) -> float | None:
         """Return cached battery voltage in volts, or None if unknown."""
         return self._battery_voltage
+
+    def navigate_to(self, x: float, y: float, yaw_deg: float = 0.0):
+        """Send a NavigateToPose goal to Nav2 (fire-and-forget)."""
+        threading.Thread(
+            target=self._send_nav_goal,
+            args=(x, y, yaw_deg),
+            daemon=True,
+        ).start()
+
+    def _send_nav_goal(self, x: float, y: float, yaw_deg: float):
+        from nav2_msgs.action import NavigateToPose
+        from rclpy.action import ActionClient
+
+        if not hasattr(self, '_nav_action_client'):
+            self._nav_action_client = ActionClient(
+                self._node, NavigateToPose, '/navigate_to_pose')
+
+        if not self._nav_action_client.wait_for_server(timeout_sec=5.0):
+            logger.warning("Nav2 /navigate_to_pose not available")
+            return
+
+        goal = NavigateToPose.Goal()
+        goal.pose.header.frame_id = 'map'
+        goal.pose.header.stamp = self._node.get_clock().now().to_msg()
+        goal.pose.pose.position.x = float(x)
+        goal.pose.pose.position.y = float(y)
+        yaw_rad = math.radians(float(yaw_deg))
+        goal.pose.pose.orientation.z = math.sin(yaw_rad / 2.0)
+        goal.pose.pose.orientation.w = math.cos(yaw_rad / 2.0)
+
+        # Wait for goal acceptance only (spin thread processes the future callback)
+        done = threading.Event()
+        future = self._nav_action_client.send_goal_async(goal)
+        future.add_done_callback(lambda _: done.set())
+        done.wait(timeout=5.0)
 
     def dispatch_ros_actions(self, ros_actions: list) -> list[str]:
         """Publish each RosAction from commands.txt. Returns list of topics published."""
@@ -260,8 +330,13 @@ class ROS2Dispatcher:
 
     def shutdown(self):
         """Shutdown rclpy and stop the spin thread."""
+        self._spinning = False
         try:
             self._node.destroy_node()
+        except Exception:
+            pass
+        self._spin_thread.join(timeout=3.0)
+        try:
             rclpy.shutdown()
         except Exception:
             pass

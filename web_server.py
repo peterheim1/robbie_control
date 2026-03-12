@@ -158,19 +158,35 @@ _HTML = """<!DOCTYPE html>
               font-family:inherit;font-size:11px;padding:2px 8px;
               border-radius:3px;cursor:pointer}
     .stop-btn:hover{background:#f85149;color:#fff}
+    .hdr-right{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+    .danger-btn{background:#3d1f1f;border:1px solid #f85149;color:#f85149;
+                font-family:inherit;font-size:12px;padding:5px 12px;
+                border-radius:4px;cursor:pointer;transition:.15s;font-weight:bold}
+    .danger-btn:hover{background:#f85149;color:#fff}
+    .shutdown-btn{background:#2d1500;border:1px solid #e3b341;color:#e3b341;
+                  font-family:inherit;font-size:12px;padding:5px 12px;
+                  border-radius:4px;cursor:pointer;transition:.15s;font-weight:bold}
+    .shutdown-btn:hover{background:#e3b341;color:#000}
+    #batteryInfo{color:#3fb950}
+    #batteryInfo.low{color:#e3b341}
+    #batteryInfo.critical{color:#f85149}
   </style>
 </head>
 <body>
 <header>
   <div class="title">&#x1F916; ROBBIE</div>
   <div id="status" class="status-badge disconnected">&#x25CF; CONNECTING</div>
-  <label class="mute-wrap" title="Silent mode — text shown, robot stays quiet">
-    <span class="mute-label">&#x1F507; Silent</span>
-    <div class="toggle">
-      <input type="checkbox" id="muteToggle" onchange="toggleMute()">
-      <span class="slider"></span>
-    </div>
-  </label>
+  <div class="hdr-right">
+    <button class="danger-btn" onclick="stopAll()" title="Stop all robot motion">&#x23F9; Stop All</button>
+    <button class="shutdown-btn" onclick="shutdownPc()" title="Shutdown the computer">&#x23FB; Shutdown</button>
+    <label class="mute-wrap" title="Silent mode — text shown, robot stays quiet">
+      <span class="mute-label">&#x1F507; Silent</span>
+      <div class="toggle">
+        <input type="checkbox" id="muteToggle" onchange="toggleMute()">
+        <span class="slider"></span>
+      </div>
+    </label>
+  </div>
 </header>
 <div class="tab-bar">
   <button class="tab-btn active" data-tab="control" onclick="showTab('control')">&#x2699; Control</button>
@@ -181,6 +197,8 @@ _HTML = """<!DOCTYPE html>
   <span id="clock">--:--:--</span>
   <span class="sep">|</span>
   <span id="weather">fetching weather...</span>
+  <span class="sep">|</span>
+  <span id="batteryInfo">&#x1F50B; --.-V</span>
 </div>
 <div class="page-wrap">
 <div class="main-col">
@@ -300,6 +318,13 @@ _HTML = """<!DOCTYPE html>
         case 'tts_mute':
           document.getElementById('muteToggle').checked = d.muted;
           break;
+        case 'battery_voltage': {
+          const v = d.voltage;
+          const el = document.getElementById('batteryInfo');
+          el.textContent = '🔋 ' + v.toFixed(1) + 'V';
+          el.className = v >= 11.5 ? '' : v >= 10.5 ? 'low' : 'critical';
+          break;
+        }
         case 'task_update':
           handleTaskUpdate(d);
           break;
@@ -347,6 +372,17 @@ _HTML = """<!DOCTYPE html>
     if (!text || !ws || ws.readyState !== 1) return;
     ws.send(JSON.stringify({type: 'command', text}));
     inp.value = '';
+  }
+
+  function stopAll() {
+    fetch('/api/stop_all', {method: 'POST'});
+    addLog('STOP ALL sent', 'warn');
+  }
+
+  function shutdownPc() {
+    if (!confirm('Shutdown the Raspberry Pi now?')) return;
+    fetch('/api/shutdown', {method: 'POST'});
+    addLog('Shutdown command sent', 'warn');
   }
 
   function toggleMute() {
@@ -638,6 +674,7 @@ class WebServer:
         self._voice_server = None
         self._docs = DocsEngine()
         self._cmd_procs: dict = {}  # cmd_id -> asyncio subprocess
+        self._uvicorn_server = None
 
     @property
     def tts_muted(self) -> bool:
@@ -706,6 +743,17 @@ class WebServer:
         finally:
             self._cmd_procs.pop(cmd_id, None)
             await _send({"type": "cmd_done", "cmd_id": cmd_id})
+
+    async def stop(self):
+        """Gracefully stop the web server and kill any running subprocesses."""
+        for proc in list(self._cmd_procs.values()):
+            try:
+                proc.kill()
+            except Exception:
+                pass
+        self._cmd_procs.clear()
+        if self._uvicorn_server is not None:
+            self._uvicorn_server.should_exit = True
 
     async def start(self, voice_server):
         """Start the web server on the current asyncio event loop."""
@@ -836,6 +884,23 @@ class WebServer:
         async def api_docs_history():
             return {"entries": self._docs.load_history(limit=20)}
 
+        @app.post("/api/stop_all")
+        async def api_stop_all():
+            """Stop all robot motion immediately."""
+            dispatcher = (self._voice_server and
+                          getattr(self._voice_server, '_dispatcher', None))
+            if dispatcher:
+                dispatcher.publish_stop()
+            return {"status": "ok"}
+
+        @app.post("/api/shutdown")
+        async def api_shutdown():
+            """Shutdown the Raspberry Pi."""
+            asyncio.create_task(asyncio.to_thread(
+                subprocess.run, ["sudo", "shutdown", "-h", "now"]
+            ))
+            return {"status": "shutting down"}
+
         @app.post("/api/tts_mute")
         async def api_tts_mute(body: dict[str, Any]):
             self._tts_muted = bool(body.get("muted", False))
@@ -857,6 +922,18 @@ class WebServer:
                 await websocket.send_text(
                     json.dumps({"type": "tts_mute", "muted": self._tts_muted})
                 )
+            except Exception:
+                pass
+            # Send current battery voltage
+            try:
+                dispatcher = (self._voice_server and
+                              getattr(self._voice_server, '_dispatcher', None))
+                if dispatcher:
+                    v = dispatcher.get_battery_voltage()
+                    if v is not None:
+                        await websocket.send_text(
+                            json.dumps({"type": "battery_voltage", "voltage": v})
+                        )
             except Exception:
                 pass
             try:
@@ -910,6 +987,19 @@ class WebServer:
             finally:
                 self._clients.discard(websocket)
 
+        async def _battery_push_loop():
+            """Push battery voltage to all clients every 10 s."""
+            while True:
+                await asyncio.sleep(10)
+                dispatcher = (self._voice_server and
+                              getattr(self._voice_server, '_dispatcher', None))
+                if dispatcher:
+                    v = dispatcher.get_battery_voltage()
+                    if v is not None:
+                        await self.broadcast({"type": "battery_voltage", "voltage": v})
+
+        asyncio.create_task(_battery_push_loop())
+
         config = uvicorn.Config(
             app,
             host=self._host,
@@ -919,5 +1009,6 @@ class WebServer:
         )
         server = uvicorn.Server(config)
         server.install_signal_handlers = lambda: None  # don't override main handlers
+        self._uvicorn_server = server
         logger.info(f"Web interface at http://{self._host}:{self._port}")
         asyncio.create_task(server.serve())

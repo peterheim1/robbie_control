@@ -134,9 +134,9 @@ class IntentClassifier:
             loc_name, loc_data = self._resolve_location(raw_location)
             if loc_name:
                 params["location"] = loc_name
-                params["x"] = loc_data["x"]
-                params["y"] = loc_data["y"]
-                params["yaw_deg"] = loc_data["yaw_deg"]
+                params["x"] = loc_data.get("x", 0.0)
+                params["y"] = loc_data.get("y", 0.0)
+                params["yaw_deg"] = loc_data.get("yaw_deg", 0.0)
                 response = (response or "").replace("{location}", raw_location)
             else:
                 return Intent(

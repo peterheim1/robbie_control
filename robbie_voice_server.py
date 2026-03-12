@@ -427,6 +427,14 @@ class RobbieVoiceServer:
         from datetime import datetime
         loop = asyncio.get_event_loop()
 
+        if intent.name == "goto":
+            location = intent.params.get("location", "destination")
+            x = intent.params.get("x", 0.0)
+            y = intent.params.get("y", 0.0)
+            yaw_deg = intent.params.get("yaw_deg", 0.0)
+            self._dispatcher.navigate_to(x, y, yaw_deg)
+            return f"navigating to {location}"
+
         if intent.name == "query_datetime":
             now = datetime.now()
             hour = now.strftime("%I").lstrip("0")
@@ -446,6 +454,9 @@ class RobbieVoiceServer:
             )
             self.console.log_llm(answer)
             return answer
+
+        if intent.name == "system_status":
+            return self._build_system_status_response()
 
         if intent.name == "query_status":
             return self._build_status_response(intent.params.get("subject", "general"))
@@ -475,18 +486,34 @@ class RobbieVoiceServer:
 
         return intent.response_text
 
+    def _build_system_status_response(self) -> str:
+        """Check /diagnostics for errors, excluding wdog and high jitter."""
+        errors = self._dispatcher.get_system_errors()
+        if not errors:
+            return "all systems healthy, no errors detected"
+        count = len(errors)
+        summary = f"{count} issue{'s' if count > 1 else ''} detected: "
+        summary += "; ".join(errors[:3])
+        if count > 3:
+            summary += f"; and {count - 3} more"
+        return summary
+
     def _build_status_response(self, subject: str) -> str:
         """Build a status response based on cached ROS 2 data."""
         if subject == "battery":
             volts = self._dispatcher.get_battery_voltage()
-            pct = self._dispatcher.get_battery_percentage()
-            if volts is not None and pct is not None:
-                return f"battery is {volts:.1f} volts, {pct:.0f} percent"
-            if volts is not None:
-                return f"battery voltage is {volts:.1f} volts"
-            if pct is not None:
-                return f"battery is at {pct:.0f} percent"
-            return "I don't have battery information right now"
+            if volts is None:
+                return "I don't have battery information right now"
+            # Health assessment for a 12V system (3S LiPo / lead-acid)
+            if volts >= 12.4:
+                level = "good"
+            elif volts >= 11.5:
+                level = "OK"
+            elif volts >= 10.5:
+                level = "low"
+            else:
+                level = "critically low"
+            return f"battery is {volts:.1f} volts, level is {level}"
         elif subject == "dock":
             state = self._dispatcher.get_dock_state()
             if state is not None:
@@ -538,6 +565,8 @@ class RobbieVoiceServer:
         """Gracefully shut down all components."""
         self._running = False
         self.console.log_info("Shutting down...")
+        if self._web:
+            await self._web.stop()
         if self._esphome:
             await self._esphome.disconnect()
         if self._task_runner:
