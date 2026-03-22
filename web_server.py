@@ -13,6 +13,7 @@ Provides:
 import asyncio
 import json
 import logging
+import os
 import subprocess
 from collections import deque
 from typing import Any
@@ -325,7 +326,12 @@ _HTML = """<!DOCTYPE html>
 <div id="tab-docs" class="tab-pane">
   <div class="docs-layout">
     <div class="docs-sidebar">
-      <div class="docs-sidebar-hdr">History</div>
+      <div class="docs-sidebar-hdr">Blog</div>
+      <a class="docs-hist-item" href="/blog/latest" target="_blank"
+         style="display:block;text-decoration:none;color:#58a6ff">
+        &#x1F4DD; Development Update
+      </a>
+      <div class="docs-sidebar-hdr" style="margin-top:8px">History</div>
       <div id="docsHistory"></div>
     </div>
     <div class="docs-main">
@@ -1219,6 +1225,21 @@ class WebServer:
                 media_type="text/event-stream",
                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
             )
+
+        @app.get("/blog/latest")
+        async def blog_latest():
+            """Serve the latest blog post HTML."""
+            import glob as _glob
+            from fastapi.responses import HTMLResponse
+            pattern = os.path.join(
+                os.path.dirname(__file__),
+                "../../robbie_bot/blog/*.html"
+            )
+            files = sorted(_glob.glob(pattern))
+            if not files:
+                return HTMLResponse("<p>No blog post found.</p>", status_code=404)
+            with open(files[-1], "r") as f:
+                return HTMLResponse(f.read())
 
         @app.get("/api/docs/history")
         async def api_docs_history():
