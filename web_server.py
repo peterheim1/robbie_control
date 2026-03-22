@@ -1233,7 +1233,7 @@ class WebServer:
             from fastapi.responses import HTMLResponse
             pattern = os.path.join(
                 os.path.dirname(__file__),
-                "../../robbie_bot/blog/*.html"
+                "../robbie_bot/blog/*.html"
             )
             files = sorted(_glob.glob(pattern))
             if not files:
