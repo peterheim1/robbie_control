@@ -196,12 +196,41 @@ class DocsEngine:
 
     def relevant_commands(self, query: str, answer: str) -> list[dict]:
         text = f"{query} {answer}".lower()
-        out  = []
+        out: list[dict] = []
         for cmd in self.load_commands():
-            words = [w for w in cmd["label"].lower().split() if len(w) > 3]
-            if any(w in text for w in words):
+            # Label words (original matching)
+            label_words = [w for w in cmd["label"].lower().split() if len(w) > 3]
+            # Explicit keywords from YAML
+            kw = [str(k).lower() for k in cmd.get("keywords", [])]
+            # Significant tokens from the shell command string itself
+            import re as _re
+            cmd_tokens = [
+                t for t in _re.split(r"[\s/\-_=:]+", cmd.get("cmd", "").lower())
+                if len(t) > 3
+            ]
+            all_terms = set(label_words + kw + cmd_tokens)
+            if any(term in text for term in all_terms):
                 out.append({"id": cmd["id"], "label": cmd["label"]})
         return out
+
+    def list_docs(self) -> list[str]:
+        """Return sorted list of indexed document paths (relative to _SRC_PATH)."""
+        self._refresh_if_stale()
+        return sorted({c.path for c in self._chunks})
+
+    def read_doc(self, rel_path: str) -> str | None:
+        """Read a doc file by its relative path. Returns None if invalid/missing."""
+        import os
+        full = (_SRC_PATH / rel_path).resolve()
+        # Security: must stay within _SRC_PATH
+        if not str(full).startswith(str(_SRC_PATH.resolve())):
+            return None
+        if not full.exists() or not full.is_file():
+            return None
+        try:
+            return full.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            return None
 
     # ── LLM streaming ─────────────────────────────────────────────────────────
 

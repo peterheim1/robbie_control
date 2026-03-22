@@ -1,6 +1,6 @@
 # Robbie Web Interface — Functional Specification (As-Built)
 
-**Date**: 2026-03-12
+**Date**: 2026-03-17
 **Status**: Implemented
 **Port**: 8090
 
@@ -59,6 +59,7 @@ All endpoints accept/return JSON unless noted. No authentication.
 | `/camera/snapshot` | GET | Latest OAK-D JPEG frame (polled by JS at ~2 Hz), 204 if no signal |
 | `/api/docs/search?q=` | GET (SSE) | Search docs + stream LLM answer tokens; live /diagnostics for fault queries |
 | `/api/docs/history` | GET | Last 20 query/answer entries |
+| `/api/logs/report` | GET (SSE) | Read latest ROS2 log files → stream LLM diagnostic report (sections: Nodes Launched, Errors, Warnings, Summary) |
 | `/ws` | WebSocket | Bidirectional: events out + commands + cmd execution in |
 
 ### POST `/api/command`
@@ -226,7 +227,31 @@ Server-side flag (`WebServer._tts_muted`). When muted:
 
 ---
 
-## 10. Docs Engine (`docs_engine.py`)
+## 10. Log Report (`/api/logs/report`)
+
+SSE stream endpoint. Reads the latest ROS2 log files and streams an LLM diagnostic report.
+
+**Collection logic (`_collect_ros_logs`):**
+- Reads `~/.ros/log/latest/launch.log` first
+- Collects all `*.log` files in `~/.ros/log/` modified within the last 4 hours
+- Sorted **newest-first** so the most recent node logs are included first when the 12,000-char limit is reached
+- Per file: shows last 50 lines (current activity) then first 10 lines (startup context)
+
+**LLM analysis:** Sends collected logs to Ollama at `10.0.0.87:11434` using `mistral` model. Returns a markdown report with sections: `## Nodes Launched`, `## Errors`, `## Warnings`, `## Summary`.
+
+**SSE token format:**
+```
+data: {"status": "Reading logs…"}\n\n
+data: {"status": "Analysing with LLM…"}\n\n
+data: {"token": "## Nodes Launched\n..."}\n\n
+data: [DONE]\n\n
+```
+
+> **Note:** cmd_vel timeout warnings in base_driver logs between navigation goals are **normal** — they occur when Nav2 pauses briefly between sequential goals and do not indicate a fault.
+
+---
+
+## 12. Docs Engine (`docs_engine.py`)
 
 - Indexes all `.md` and `CLAUDE.md` files in the workspace at startup
 - Vector search using TF-IDF + cosine similarity
@@ -238,7 +263,7 @@ Server-side flag (`WebServer._tts_muted`). When muted:
 
 ---
 
-## 11. ROS2 Dispatcher (`ros2_dispatcher.py`)
+## 13. ROS2 Dispatcher (`ros2_dispatcher.py`)
 
 Key design points:
 - `rclpy.spin()` runs in a daemon background thread (`ros2_spin`)
@@ -250,7 +275,7 @@ Key design points:
 
 ---
 
-## 12. Running the Voice Server
+## 14. Running the Voice Server
 
 ```bash
 # On the robot
@@ -279,7 +304,7 @@ wled:
 
 ---
 
-## 13. Dependencies
+## 15. Dependencies
 
 **Python** (in `requirements.txt`):
 ```
@@ -291,7 +316,7 @@ uvicorn>=0.29.0
 
 ---
 
-## 14. Troubleshooting
+## 16. Troubleshooting
 
 | Symptom | Check |
 |---|---|

@@ -136,7 +136,16 @@ _HTML = """<!DOCTYPE html>
     .docs-answer pre{background:#0d1117;border-radius:6px;padding:10px;margin:8px 0;
                      overflow-x:auto;font-family:'Courier New',monospace;font-size:12px}
     .docs-sources{margin-top:10px;border-top:1px solid #30363d;padding-top:8px}
-    .docs-source{font-size:11px;color:#6e7681;margin:2px 0}
+    .docs-source{font-size:11px;color:#58a6ff;margin:2px 0;cursor:pointer;text-decoration:underline}
+    .docs-source:hover{color:#79c0ff}
+    .doc-viewer{background:#161b22;border:1px solid #30363d;border-radius:6px;
+                margin-top:10px;padding:12px;display:none;max-height:400px;overflow-y:auto}
+    .doc-viewer-hdr{display:flex;justify-content:space-between;align-items:center;
+                    margin-bottom:8px;padding-bottom:8px;border-bottom:1px solid #30363d}
+    .doc-viewer-title{font-size:12px;color:#8b949e;font-family:'Courier New',monospace}
+    .doc-viewer-close{background:none;border:none;color:#6e7681;cursor:pointer;
+                      font-size:16px;padding:0 4px;line-height:1}
+    .doc-viewer-close:hover{color:#f85149}
     .docs-cmds{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px;
                padding-top:8px;border-top:1px solid #30363d}
     .run-btn{background:#1f2d1f;border:1px solid #3fb950;color:#3fb950;
@@ -170,15 +179,76 @@ _HTML = """<!DOCTYPE html>
     #batteryInfo{color:#3fb950}
     #batteryInfo.low{color:#e3b341}
     #batteryInfo.critical{color:#f85149}
+    /* ── Logs tab ── */
+    .logs-layout{display:flex;flex-direction:column;height:calc(100vh - 112px);padding:16px;gap:12px}
+    .logs-toolbar{display:flex;align-items:center;gap:12px;flex-shrink:0}
+    .logs-status{font-size:12px;color:#8b949e}
+    .logs-report{background:#161b22;border:1px solid #30363d;border-radius:8px;
+                 padding:14px;font-size:13px;line-height:1.8;overflow-y:auto;
+                 flex:1;word-break:break-word}
+    .logs-report code{background:#0d1117;border-radius:4px;padding:2px 6px;
+                      font-family:'Courier New',monospace;font-size:12px}
+    .logs-report pre{background:#0d1117;border-radius:6px;padding:10px;margin:8px 0;
+                     overflow-x:auto;font-family:'Courier New',monospace;font-size:12px}
+    .log-error{color:#f85149} .log-warn{color:#e3b341} .log-ok{color:#3fb950}
+    /* ── Tooltip ── */
+    [data-tip]{position:relative;cursor:default}
+    [data-tip]:hover::after{content:attr(data-tip);position:absolute;z-index:999;
+      bottom:calc(100% + 6px);left:50%;transform:translateX(-50%);
+      background:#1c2128;color:#c9d1d9;border:1px solid #444c56;
+      border-radius:6px;padding:6px 10px;font-size:11px;white-space:pre-wrap;
+      max-width:260px;line-height:1.5;pointer-events:none;
+      box-shadow:0 4px 12px rgba(0,0,0,.5)}
+    [data-tip]:hover::before{content:"";position:absolute;z-index:999;
+      bottom:calc(100% + 1px);left:50%;transform:translateX(-50%);
+      border:5px solid transparent;border-top-color:#444c56;pointer-events:none}
+    /* ── Task context menu ── */
+    #taskCtxMenu{position:fixed;z-index:1000;background:#1c2128;border:1px solid #444c56;
+      border-radius:6px;padding:4px 0;box-shadow:0 4px 16px rgba(0,0,0,.6);display:none}
+    .ctx-item{padding:7px 16px;font-size:13px;color:#c9d1d9;cursor:pointer;
+      font-family:'Courier New',monospace;white-space:nowrap}
+    .ctx-item:hover{background:#2d333b;color:#58a6ff}
+    /* ── Task editor modal ── */
+    #taskEditorOverlay{display:none;position:fixed;inset:0;z-index:2000;
+      background:rgba(0,0,0,.65);align-items:center;justify-content:center}
+    #taskEditorOverlay.open{display:flex}
+    #taskEditorBox{background:#161b22;border:1px solid #30363d;border-radius:10px;
+      width:min(600px,96vw);max-height:80vh;display:flex;flex-direction:column;
+      box-shadow:0 8px 32px rgba(0,0,0,.7)}
+    .task-ed-hdr{display:flex;justify-content:space-between;align-items:center;
+      padding:10px 16px;border-bottom:1px solid #30363d;background:#21262d;
+      border-radius:10px 10px 0 0}
+    .task-ed-title{color:#e6edf3;font-size:14px;font-weight:bold}
+    .task-ed-close{background:none;border:none;color:#6e7681;font-size:18px;
+      cursor:pointer;padding:0 4px;line-height:1}
+    .task-ed-close:hover{color:#f85149}
+    .task-ed-body{padding:12px;flex:1;overflow:auto}
+    .task-ed-help{font-size:11px;color:#6e7681;margin-bottom:8px;line-height:1.5}
+    #taskEditorArea{width:100%;background:#0d1117;color:#c9d1d9;border:1px solid #30363d;
+      border-radius:6px;font-family:'Courier New',monospace;font-size:13px;
+      padding:10px;resize:vertical;min-height:200px;outline:none;line-height:1.6}
+    #taskEditorArea:focus{border-color:#58a6ff}
+    .task-ed-footer{display:flex;justify-content:flex-end;gap:8px;
+      padding:10px 16px;border-top:1px solid #30363d;background:#161b22;
+      border-radius:0 0 10px 10px}
+    .task-ed-save{background:#238636;color:#fff;border:none;border-radius:6px;
+      padding:7px 20px;font-family:inherit;font-size:13px;cursor:pointer}
+    .task-ed-save:hover{background:#2ea043}
+    .task-ed-cancel{background:none;border:1px solid #30363d;color:#8b949e;
+      border-radius:6px;padding:7px 16px;font-family:inherit;font-size:13px;cursor:pointer}
+    .task-ed-cancel:hover{border-color:#8b949e;color:#c9d1d9}
   </style>
 </head>
 <body>
 <header>
   <div class="title">&#x1F916; ROBBIE</div>
-  <div id="status" class="status-badge disconnected">&#x25CF; CONNECTING</div>
+  <div id="status" class="status-badge disconnected"
+       data-tip="Pipeline state&#10;listening  — idle, waiting for wake word&#10;recording  — capturing speech&#10;processing — STT + intent running&#10;speaking   — TTS active&#10;disconnected — WebSocket lost">&#x25CF; CONNECTING</div>
   <div class="hdr-right">
-    <button class="danger-btn" onclick="stopAll()" title="Stop all robot motion">&#x23F9; Stop All</button>
-    <button class="shutdown-btn" onclick="shutdownPc()" title="Shutdown the computer">&#x23FB; Shutdown</button>
+    <button class="danger-btn" onclick="stopAll()"
+            data-tip="Stop all motion immediately&#10;Zeros cmd_vel, drive motors&#10;and voice pipeline">&#x23F9; Stop All</button>
+    <button class="shutdown-btn" onclick="shutdownPc()"
+            data-tip="Shut down the Raspberry Pi&#10;(requires confirmation)">&#x23FB; Shutdown</button>
     <label class="mute-wrap" title="Silent mode — text shown, robot stays quiet">
       <span class="mute-label">&#x1F507; Silent</span>
       <div class="toggle">
@@ -191,6 +261,7 @@ _HTML = """<!DOCTYPE html>
 <div class="tab-bar">
   <button class="tab-btn active" data-tab="control" onclick="showTab('control')">&#x2699; Control</button>
   <button class="tab-btn" data-tab="docs" onclick="showTab('docs')">&#x1F4DA; Docs</button>
+  <button class="tab-btn" data-tab="logs" onclick="showTab('logs')">&#x1F4CB; Logs</button>
 </div>
 <div id="tab-control" class="tab-pane active">
 <div class="infobar">
@@ -198,7 +269,7 @@ _HTML = """<!DOCTYPE html>
   <span class="sep">|</span>
   <span id="weather">fetching weather...</span>
   <span class="sep">|</span>
-  <span id="batteryInfo">&#x1F50B; --.-V</span>
+  <span id="batteryInfo" data-tip="Battery voltage&#10;Green  ≥11.5V  (good)&#10;Yellow 10.5–11.5V (low)&#10;Red    &lt;10.5V  (critical)">&#x1F50B; --.-V</span>
 </div>
 <div class="page-wrap">
 <div class="main-col">
@@ -220,9 +291,12 @@ _HTML = """<!DOCTYPE html>
     <div class="card-hdr">Last Interaction</div>
     <div class="card-body">
       <div class="grid">
-        <span class="lbl">Heard</span>   <span id="lHeard"    class="val">&mdash;</span>
-        <span class="lbl">Intent</span>  <span id="lIntent"   class="val">&mdash;</span>
-        <span class="lbl">Response</span><span id="lResponse" class="val">&mdash;</span>
+        <span class="lbl" data-tip="What Robbie heard&#10;(STT transcript or web injection)">Heard</span>
+        <span id="lHeard" class="val">&mdash;</span>
+        <span class="lbl" data-tip="Classified intent + parameters&#10;Determined by the intent classifier">Intent</span>
+        <span id="lIntent" class="val">&mdash;</span>
+        <span class="lbl" data-tip="Text sent to TTS&#10;🔇 badge = muted, not spoken">Response</span>
+        <span id="lResponse" class="val">&mdash;</span>
       </div>
     </div>
   </div>
@@ -268,7 +342,48 @@ _HTML = """<!DOCTYPE html>
       <div id="docsAnswer" class="docs-answer" style="color:#6e7681">Ask anything about Robbie&#x2026;</div>
       <div id="docsSources" class="docs-sources" style="display:none"></div>
       <div id="docsCmds" class="docs-cmds" style="display:none"></div>
+      <div id="docViewer" class="doc-viewer">
+        <div class="doc-viewer-hdr">
+          <span id="docViewerTitle" class="doc-viewer-title"></span>
+          <button class="doc-viewer-close" onclick="closeDocViewer()" title="Close">&#x2715;</button>
+        </div>
+        <div id="docViewerContent" class="docs-answer"></div>
+      </div>
       <div id="cmdResults"></div>
+    </div>
+  </div>
+</div>
+<div id="tab-logs" class="tab-pane">
+  <div class="logs-layout">
+    <div class="logs-toolbar">
+      <button class="send-btn" onclick="generateLogsReport()">&#x1F50D; Generate Report</button>
+      <span id="logsStatus" class="logs-status"></span>
+    </div>
+    <div id="logsReport" class="logs-report" style="color:#6e7681">
+      Click Generate Report to analyse the latest ROS2 session logs&hellip;
+    </div>
+  </div>
+</div>
+<!-- Task context menu -->
+<div id="taskCtxMenu">
+  <div class="ctx-item" onclick="taskCtxView()">&#x1F4C4; View / Edit</div>
+  <div class="ctx-item" onclick="taskCtxRun()">&#x25B6; Run</div>
+</div>
+<!-- Task editor modal -->
+<div id="taskEditorOverlay" onclick="if(event.target===this)closeTaskEditor()">
+  <div id="taskEditorBox">
+    <div class="task-ed-hdr">
+      <span id="taskEditorTitle" class="task-ed-title"></span>
+      <button class="task-ed-close" onclick="closeTaskEditor()">&#x2715;</button>
+    </div>
+    <div class="task-ed-body">
+      <div class="task-ed-help">One step per line &nbsp;&#x2014;&nbsp; format: <code>STEP_TYPE:arg1:arg2</code><br>
+        e.g. <code>MakeSound:hello</code> &nbsp; <code>NavigateTo:kitchen</code> &nbsp; <code>Wait:2.0</code></div>
+      <textarea id="taskEditorArea" rows="14" spellcheck="false"></textarea>
+    </div>
+    <div class="task-ed-footer">
+      <button class="task-ed-cancel" onclick="closeTaskEditor()">Cancel</button>
+      <button class="task-ed-save" onclick="saveTask()">&#x1F4BE; Save</button>
     </div>
   </div>
 </div>
@@ -442,13 +557,82 @@ _HTML = """<!DOCTYPE html>
       btn.className = 'task-btn';
       btn.id = 'task-' + name;
       btn.textContent = name;
+      btn.setAttribute('data-tip', 'Left-click to run\\nRight-click to view / edit');
       btn.onclick = () => runTask(name);
+      btn.oncontextmenu = (e) => { e.preventDefault(); showTaskCtxMenu(e, name); };
       el.appendChild(btn);
       const step = document.createElement('div');
       step.className = 'task-step';
       step.id = 'step-' + name;
       el.appendChild(step);
     });
+  }
+
+  // ---- Task context menu ----
+  let _ctxTask = null;
+
+  function showTaskCtxMenu(e, name) {
+    _ctxTask = name;
+    const menu = document.getElementById('taskCtxMenu');
+    menu.style.display = 'block';
+    // Position near cursor but keep within viewport
+    const x = Math.min(e.clientX, window.innerWidth  - menu.offsetWidth  - 8);
+    const y = Math.min(e.clientY, window.innerHeight - menu.offsetHeight - 8);
+    menu.style.left = x + 'px';
+    menu.style.top  = y + 'px';
+  }
+
+  function hideTaskCtxMenu() {
+    document.getElementById('taskCtxMenu').style.display = 'none';
+  }
+
+  document.addEventListener('click',   hideTaskCtxMenu);
+  document.addEventListener('keydown', e => { if(e.key==='Escape') { hideTaskCtxMenu(); closeTaskEditor(); } });
+
+  function taskCtxRun()  { hideTaskCtxMenu(); if(_ctxTask) runTask(_ctxTask); }
+  function taskCtxView() { hideTaskCtxMenu(); if(_ctxTask) openTaskEditor(_ctxTask); }
+
+  // ---- Task editor ----
+  let _editingTask = null;
+
+  async function openTaskEditor(name) {
+    _editingTask = name;
+    document.getElementById('taskEditorTitle').textContent = '\u270F\ufe0f  ' + name + '.txt';
+    document.getElementById('taskEditorArea').value = 'Loading\u2026';
+    document.getElementById('taskEditorOverlay').classList.add('open');
+    try {
+      const r = await fetch('/api/tasks/get?name=' + encodeURIComponent(name));
+      const d = await r.json();
+      document.getElementById('taskEditorArea').value = d.content || '';
+    } catch(e) {
+      document.getElementById('taskEditorArea').value = '# error loading file: ' + e;
+    }
+  }
+
+  function closeTaskEditor() {
+    document.getElementById('taskEditorOverlay').classList.remove('open');
+    _editingTask = null;
+  }
+
+  async function saveTask() {
+    if (!_editingTask) return;
+    const content = document.getElementById('taskEditorArea').value;
+    try {
+      const r = await fetch('/api/tasks/save', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({name: _editingTask, content}),
+      });
+      const d = await r.json();
+      if (d.status === 'ok') {
+        closeTaskEditor();
+        loadTasks();
+      } else {
+        alert('Save failed: ' + (d.error || 'unknown'));
+      }
+    } catch(e) {
+      alert('Save failed: ' + e);
+    }
   }
 
   function runTask(name) {
@@ -568,7 +752,8 @@ _HTML = """<!DOCTYPE html>
               diagWrap.style.display = 'block';
             } else if (ev.sources !== undefined) {
               srcEl.innerHTML = ev.sources.map(s =>
-                '<div class="docs-source">&#x1F4C4; ' + esc(s) + '</div>').join('');
+                '<div class="docs-source" onclick="openDocViewer(' + JSON.stringify(s) + ')">'
+                + '&#x1F4C4; ' + esc(s) + '</div>').join('');
               srcEl.style.display = ev.sources.length ? 'block' : 'none';
             } else if (ev.commands !== undefined) {
               cmdsEl.innerHTML = ev.commands.map(c =>
@@ -610,6 +795,28 @@ _HTML = """<!DOCTYPE html>
     } catch(e) {}
   }
 
+  // ---- Doc viewer ----
+  async function openDocViewer(path) {
+    const viewer  = document.getElementById('docViewer');
+    const title   = document.getElementById('docViewerTitle');
+    const content = document.getElementById('docViewerContent');
+    title.textContent = path;
+    content.innerHTML = '<span style="color:#8b949e">Loading\u2026</span>';
+    viewer.style.display = 'block';
+    try {
+      const r = await fetch('/api/docs/file?path=' + encodeURIComponent(path));
+      const d = await r.json();
+      if (d.error) { content.textContent = '\u26a0 ' + d.error; return; }
+      content.innerHTML = mdRender(d.content);
+    } catch(e) {
+      content.textContent = '\u26a0 ' + e;
+    }
+  }
+
+  function closeDocViewer() {
+    document.getElementById('docViewer').style.display = 'none';
+  }
+
   // ---- Command execution ----
   function runCmd(id, label) {
     if (!ws || ws.readyState !== 1) return;
@@ -637,6 +844,51 @@ _HTML = """<!DOCTYPE html>
   function stopCmd(id) {
     if (ws && ws.readyState === 1)
       ws.send(JSON.stringify({type: 'stop_cmd', cmd_id: id}));
+  }
+
+  // ---- Logs report ----
+  let logsAbort = null;
+
+  async function generateLogsReport() {
+    const reportEl = document.getElementById('logsReport');
+    const statusEl = document.getElementById('logsStatus');
+    reportEl.innerHTML = '<span style="color:#8b949e">&#x23F3; Reading logs&hellip;</span>';
+    statusEl.textContent = '';
+    if (logsAbort) logsAbort.abort();
+    logsAbort = new AbortController();
+    try {
+      const resp = await fetch('/api/logs/report', {signal: logsAbort.signal});
+      if (!resp.ok) { reportEl.textContent = '\u26a0 Error: ' + resp.status; return; }
+      const reader = resp.body.getReader();
+      const dec = new TextDecoder();
+      let buf = '', report = '';
+      reportEl.innerHTML = '';
+      while (true) {
+        const {done, value} = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, {stream: true});
+        const lines = buf.split('\\n');
+        buf = lines.pop();
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          const raw = line.slice(6);
+          if (raw === '[DONE]') { statusEl.textContent = '\u2713 Done'; break; }
+          try {
+            const ev = JSON.parse(raw);
+            if (ev.status !== undefined) {
+              statusEl.textContent = ev.status;
+            } else if (ev.token !== undefined) {
+              report += ev.token;
+              reportEl.innerHTML = mdRender(report);
+              reportEl.scrollTop = reportEl.scrollHeight;
+            }
+          } catch(e) {}
+        }
+      }
+    } catch(e) {
+      if (e.name !== 'AbortError')
+        reportEl.textContent = '\u26a0 ' + e;
+    }
   }
 
   // ---- Minimal markdown renderer ----
@@ -744,6 +996,58 @@ class WebServer:
             self._cmd_procs.pop(cmd_id, None)
             await _send({"type": "cmd_done", "cmd_id": cmd_id})
 
+    def _collect_ros_logs(self, max_chars: int = 12000) -> str:
+        """Collect the latest ROS2 session logs into a single text blob."""
+        import os
+        import time
+
+        log_dir = os.path.expanduser("~/.ros/log")
+        parts: list[str] = []
+
+        # 1. Launch log from the latest session directory
+        launch_log = os.path.join(log_dir, "latest", "launch.log")
+        if os.path.exists(launch_log):
+            try:
+                with open(launch_log) as f:
+                    parts.append("=== launch.log ===\n" + f.read())
+            except OSError:
+                pass
+
+        # 2. Individual node logs — files in log_dir modified in the last 4 hours,
+        #    sorted newest-first so the most recent activity is included first when
+        #    the combined output is trimmed to max_chars.
+        cutoff = time.time() - 4 * 3600
+        node_logs = sorted(
+            [
+                os.path.join(log_dir, fn)
+                for fn in os.listdir(log_dir)
+                if fn.endswith(".log") and
+                os.path.isfile(os.path.join(log_dir, fn)) and
+                os.path.getmtime(os.path.join(log_dir, fn)) >= cutoff
+            ],
+            key=os.path.getmtime,
+            reverse=True,  # newest first — ensures recent logs survive truncation
+        )
+
+        for path in node_logs:
+            try:
+                with open(path) as f:
+                    lines = f.readlines()
+                # Keep last 50 lines (latest activity) + first 10 lines (startup)
+                if len(lines) > 60:
+                    excerpt = lines[-50:] + ["...\n"] + lines[:10]
+                else:
+                    excerpt = lines
+                name = os.path.basename(path)
+                parts.append(f"\n=== {name} ===\n" + "".join(excerpt))
+            except OSError:
+                pass
+
+        combined = "\n".join(parts)
+        if len(combined) > max_chars:
+            combined = combined[:max_chars] + "\n...(truncated)"
+        return combined
+
     async def stop(self):
         """Gracefully stop the web server and kill any running subprocesses."""
         for proc in list(self._cmd_procs.values()):
@@ -774,7 +1078,8 @@ class WebServer:
 
         @app.get("/", response_class=HTMLResponse)
         async def index():
-            return _HTML
+            from fastapi.responses import HTMLResponse as HR
+            return HR(_HTML, headers={"Cache-Control": "no-store"})
 
         @app.post("/api/speak")
         async def api_speak(body: dict[str, Any]):
@@ -812,6 +1117,41 @@ class WebServer:
             if self._voice_server and self._voice_server._task_runner:
                 tasks = self._voice_server._task_runner.list_tasks()
             return {"tasks": tasks}
+
+        @app.get("/api/tasks/get")
+        async def api_tasks_get(name: str = ""):
+            """Return the raw content of a task .txt file."""
+            tr = (self._voice_server and
+                  getattr(self._voice_server, '_task_runner', None))
+            if not tr or not name:
+                return {"error": "not available"}
+            import re
+            if not re.match(r'^[\w\-. ]+$', name):
+                return {"error": "invalid name"}
+            path = tr._tasks_dir / f"{name}.txt"
+            if not path.exists():
+                return {"error": "not found"}
+            return {"content": path.read_text(encoding="utf-8", errors="replace")}
+
+        @app.post("/api/tasks/save")
+        async def api_tasks_save(body: dict[str, Any]):
+            """Save edited content back to a task .txt file."""
+            tr = (self._voice_server and
+                  getattr(self._voice_server, '_task_runner', None))
+            name    = str(body.get("name", "")).strip()
+            content = str(body.get("content", ""))
+            if not tr or not name:
+                return {"status": "error", "error": "not available"}
+            import re
+            if not re.match(r'^[\w\-. ]+$', name):
+                return {"status": "error", "error": "invalid name"}
+            path = tr._tasks_dir / f"{name}.txt"
+            # Only allow saving existing task files (no path traversal, no new files)
+            if not path.exists():
+                return {"status": "error", "error": "task not found"}
+            path.write_text(content, encoding="utf-8")
+            logger.info(f"Task saved via web editor: {name}.txt")
+            return {"status": "ok"}
 
         @app.post("/api/listen")
         async def api_listen(body: dict[str, Any] = {}):
@@ -883,6 +1223,73 @@ class WebServer:
         @app.get("/api/docs/history")
         async def api_docs_history():
             return {"entries": self._docs.load_history(limit=20)}
+
+        @app.get("/api/docs/list")
+        async def api_docs_list():
+            """Return sorted list of all indexed document paths."""
+            return {"docs": self._docs.list_docs()}
+
+        @app.get("/api/docs/file")
+        async def api_docs_file(path: str = ""):
+            """Return the raw markdown content of a doc file by relative path."""
+            if not path:
+                return {"error": "no path specified"}
+            content = self._docs.read_doc(path)
+            if content is None:
+                return {"error": "file not found or access denied"}
+            return {"path": path, "content": content}
+
+        @app.get("/api/logs/report")
+        async def api_logs_report():
+            """SSE stream: read latest ROS2 logs and stream an LLM diagnostic report."""
+            from fastapi.responses import StreamingResponse as SR
+
+            async def generate():
+                yield f"data: {json.dumps({'status': 'Reading logs…'})}\n\n"
+
+                log_text = await asyncio.to_thread(self._collect_ros_logs)
+                if not log_text.strip():
+                    yield f"data: {json.dumps({'token': 'No ROS2 log files found.'})}\n\n"
+                    yield "data: [DONE]\n\n"
+                    return
+
+                yield f"data: {json.dumps({'status': 'Analysing with LLM…'})}\n\n"
+
+                system_prompt = (
+                    "You are a robot systems diagnostics analyst. "
+                    "Analyse the provided ROS2 log output and produce a concise report. "
+                    "Use markdown with these sections: "
+                    "## Nodes Launched, ## Errors, ## Warnings, ## Summary. "
+                    "In Errors and Warnings list each unique issue once with a brief explanation. "
+                    "In Summary give a one-paragraph overall health assessment."
+                )
+                messages = [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": f"ROS2 logs:\n\n{log_text}"},
+                ]
+
+                try:
+                    import ollama
+                    client = ollama.AsyncClient(host="http://10.0.0.87:11434")
+                    async for chunk in await client.chat(
+                        model="mistral",
+                        messages=messages,
+                        stream=True,
+                        options={"num_predict": 1024},
+                    ):
+                        token = chunk.message.content
+                        if token:
+                            yield f"data: {json.dumps({'token': token})}\n\n"
+                except Exception as e:
+                    yield f"data: {json.dumps({'token': f'LLM error: {e}'})}\n\n"
+
+                yield "data: [DONE]\n\n"
+
+            return SR(
+                generate(),
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            )
 
         @app.post("/api/stop_all")
         async def api_stop_all():
