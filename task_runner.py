@@ -5,12 +5,14 @@ File format (one step per line, blank lines ignored):
     TASK:MakeSound:some text  speak text via TTS
     TASK:Wait                 pause 5 seconds
     TASK:Dock                 call start_docking service
+    TASK:Undock               call undock service
     TASK:LookAt               head look-at (placeholder for future arm poses)
 """
 
 import asyncio
+import json
 import logging
-import math
+import threading
 from pathlib import Path
 
 import yaml
@@ -50,9 +52,13 @@ class TaskRunner:
 
         # Lazy ROS2 node — only created when first nav/dock step runs
         self._ros_node = None
-        self._nav_client = None
+        self._ros_executor = None
+        self._spin_thread = None
+        self._bt_cmd_pub = None
+        self._bt_status_cmd: str = ""
+        self._bt_status_lock = threading.Lock()
         self._dock_client = None
-        self._NavigateToPose = None
+        self._undock_client = None
 
     # ------------------------------------------------------------------
     # Locations
@@ -66,16 +72,15 @@ class TaskRunner:
         except Exception as e:
             logger.warning(f"TaskRunner: could not load locations: {e}")
 
-    def _resolve_location(self, name: str) -> dict | None:
-        """Find location data by canonical name or alias (case-insensitive)."""
+    def _resolve_location(self, name: str) -> tuple[str, dict] | None:
+        """Find (canonical_name, location_data) by name or alias (case-insensitive)."""
         key = name.lower().replace(" ", "_")
         if key in self._locations:
-            return self._locations[key]
-        # Try aliases
-        for loc_data in self._locations.values():
+            return (key, self._locations[key])
+        for canon_key, loc_data in self._locations.items():
             for alias in loc_data.get("aliases", []):
                 if alias.lower() == name.lower():
-                    return loc_data
+                    return (canon_key, loc_data)
         return None
 
     # ------------------------------------------------------------------
@@ -83,33 +88,58 @@ class TaskRunner:
     # ------------------------------------------------------------------
 
     def _ensure_ros_node(self):
-        """Create the task runner's own ROS2 node on first use."""
+        """Create the task runner's own ROS2 node on first use and spin it."""
         if self._ros_node is not None:
             return
         try:
             import rclpy
+            import rclpy.executors
             from rclpy.node import Node
+            from std_msgs.msg import String as StringMsg
             self._ros_node = Node("robbie_task_runner")
 
-            try:
-                from nav2_msgs.action import NavigateToPose
-                from rclpy.action import ActionClient
-                self._NavigateToPose = NavigateToPose
-                self._nav_client = ActionClient(
-                    self._ros_node, NavigateToPose, "navigate_to_pose"
-                )
-            except ImportError:
-                logger.warning("TaskRunner: nav2_msgs not available — NAV steps will skip")
+            # Argus command publisher and status subscriber
+            self._bt_cmd_pub = self._ros_node.create_publisher(
+                StringMsg, "/bt_command", 10)
+            self._ros_node.create_subscription(
+                StringMsg, "/bt_status", self._on_bt_status, 10)
 
             try:
                 from std_srvs.srv import Empty
                 self._dock_client = self._ros_node.create_client(Empty, "start_docking")
+                self._undock_client = self._ros_node.create_client(Empty, "undock")
             except Exception:
                 pass
+
+            self._ros_executor = rclpy.executors.SingleThreadedExecutor()
+            self._ros_executor.add_node(self._ros_node)
+            self._spin_thread = threading.Thread(
+                target=self._ros_executor.spin,
+                daemon=True,
+                name="task_runner_spin",
+            )
+            self._spin_thread.start()
 
             logger.info("TaskRunner: ROS2 node initialised")
         except Exception as e:
             logger.error(f"TaskRunner: ROS2 init failed: {e}")
+
+    def _on_bt_status(self, msg):
+        """Cache current command from /bt_status JSON."""
+        try:
+            data = json.loads(msg.data)
+            with self._bt_status_lock:
+                self._bt_status_cmd = data.get("cmd", "")
+        except Exception:
+            pass
+
+    async def _poll_until_ready(self, ready_fn, timeout: float = 5.0):
+        """Async-poll ready_fn() until True or timeout (seconds)."""
+        deadline = asyncio.get_running_loop().time() + timeout
+        while not ready_fn():
+            if asyncio.get_running_loop().time() >= deadline:
+                raise asyncio.TimeoutError
+            await asyncio.sleep(0.2)
 
     # ------------------------------------------------------------------
     # Public API
@@ -203,6 +233,8 @@ class TaskRunner:
                 await asyncio.sleep(self.WAIT_SECS)
             elif task_type == "Dock":
                 await self._step_dock()
+            elif task_type == "Undock":
+                await self._step_undock()
             elif task_type == "LookAt":
                 pass  # future: arm / head pose
             else:
@@ -222,87 +254,114 @@ class TaskRunner:
                 pass
 
     # ------------------------------------------------------------------
-    # Navigation (Nav2 action, blocking in thread pool)
+    # Navigation (Nav2 action, fully async via Future bridge)
     # ------------------------------------------------------------------
 
     async def _step_navigate(self, loc_name: str):
         self._ensure_ros_node()
-        if not self._nav_client:
-            logger.warning("[TASK] NAV skipped — Nav2 not available")
+        if not self._bt_cmd_pub:
+            logger.warning("[TASK] NAV skipped — bt_command not available")
             return
 
-        loc = self._resolve_location(loc_name)
-        if not loc:
+        result = self._resolve_location(loc_name)
+        if not result:
             logger.warning(f"[TASK] Unknown location: {loc_name}")
             await self._speak(f"I don't know where {loc_name} is")
             return
 
+        canonical_name, _ = result
         await self._speak(f"navigating to {loc_name}")
-        yaw = math.radians(loc.get("yaw_deg", 0.0))
 
-        goal = self._NavigateToPose.Goal()
-        goal.pose.header.frame_id = "map"
-        goal.pose.header.stamp = self._ros_node.get_clock().now().to_msg()
-        goal.pose.pose.position.x = float(loc["x"])
-        goal.pose.pose.position.y = float(loc["y"])
-        goal.pose.pose.position.z = 0.0
-        goal.pose.pose.orientation.z = math.sin(yaw / 2)
-        goal.pose.pose.orientation.w = math.cos(yaw / 2)
+        from std_msgs.msg import String as StringMsg
+        cmd_msg = StringMsg()
+        cmd_msg.data = json.dumps({"cmd": "goto_location", "location": canonical_name})
+        self._bt_cmd_pub.publish(cmd_msg)
 
-        success = await asyncio.get_event_loop().run_in_executor(
-            None, self._nav_blocking, goal, loc_name
-        )
-        if not success and not self._cancelled:
-            await self._speak(f"Navigation to {loc_name} failed")
+        loop = asyncio.get_running_loop()
 
-    def _nav_blocking(self, goal, loc_name: str) -> bool:
-        """Send Nav2 goal and block until complete. Runs in a thread pool."""
-        import rclpy
-        if not self._nav_client.wait_for_server(timeout_sec=5.0):
-            logger.error("[TASK] Nav2 action server not available")
-            return False
+        # Wait for argus to pick up the command (bt_status.cmd → "goto_location")
+        pickup_deadline = loop.time() + 10.0
+        while True:
+            with self._bt_status_lock:
+                if self._bt_status_cmd == "goto_location":
+                    break
+            if loop.time() > pickup_deadline:
+                logger.error(f"[TASK] Argus did not pick up nav to {loc_name}")
+                return
+            await asyncio.sleep(0.2)
 
-        goal_future = self._nav_client.send_goal_async(goal)
-        rclpy.spin_until_future_complete(self._ros_node, goal_future, timeout_sec=10.0)
-        goal_handle = goal_future.result()
+        # Wait for completion (bt_status.cmd → "" after ClearCommand)
+        nav_deadline = loop.time() + 300.0
+        while True:
+            with self._bt_status_lock:
+                if self._bt_status_cmd == "":
+                    break
+            if self._cancelled or loop.time() > nav_deadline:
+                if loop.time() > nav_deadline:
+                    logger.error(f"[TASK] Nav to {loc_name} timed out after 300s")
+                break
+            await asyncio.sleep(0.5)
 
-        if not goal_handle or not goal_handle.accepted:
-            logger.error(f"[TASK] Nav goal to {loc_name} rejected")
-            return False
-
-        result_future = goal_handle.get_result_async()
-        rclpy.spin_until_future_complete(
-            self._ros_node, result_future, timeout_sec=120.0
-        )
-        result = result_future.result()
-        success = bool(result and result.status == 4)
-        logger.info(f"[TASK] Nav to {loc_name}: {'OK' if success else 'FAILED'}")
-        return success
+        logger.info(f"[TASK] Nav to {loc_name}: complete")
 
     # ------------------------------------------------------------------
-    # Docking service
+    # Docking / undocking services (fully async via Future bridge)
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _bridge(rclpy_future, loop: asyncio.AbstractEventLoop):
+        """Bridge an rclpy Future onto the asyncio event loop."""
+        aio_future = loop.create_future()
+
+        def _done(f):
+            if aio_future.done():
+                return
+            exc = f.exception()
+            if exc is not None:
+                loop.call_soon_threadsafe(aio_future.set_exception, exc)
+            else:
+                loop.call_soon_threadsafe(aio_future.set_result, f.result())
+
+        rclpy_future.add_done_callback(_done)
+        return aio_future
+
+    async def _call_service(self, client, name: str):
+        from std_srvs.srv import Empty
+        loop = asyncio.get_running_loop()
+        try:
+            await self._poll_until_ready(client.service_is_ready, timeout=5.0)
+        except asyncio.TimeoutError:
+            logger.error(f"[TASK] {name} service not available")
+            return
+        try:
+            await asyncio.wait_for(
+                self._bridge(client.call_async(Empty.Request()), loop),
+                timeout=30.0,
+            )
+        except asyncio.TimeoutError:
+            logger.error(f"[TASK] {name} service call timed out")
 
     async def _step_dock(self):
         self._ensure_ros_node()
         if not self._dock_client:
             logger.warning("[TASK] Dock skipped — service not available")
             return
-        await asyncio.get_event_loop().run_in_executor(
-            None, self._service_blocking, self._dock_client, "start_docking"
-        )
+        await self._call_service(self._dock_client, "start_docking")
 
-    def _service_blocking(self, client, name: str) -> bool:
-        import rclpy
-        from std_srvs.srv import Empty
-        if not client.wait_for_service(timeout_sec=5.0):
-            logger.error(f"[TASK] {name} service not available")
-            return False
-        future = client.call_async(Empty.Request())
-        rclpy.spin_until_future_complete(self._ros_node, future, timeout_sec=10.0)
-        return True
+    async def _step_undock(self):
+        self._ensure_ros_node()
+        if not self._undock_client:
+            logger.warning("[TASK] Undock skipped — service not available")
+            return
+        await self._speak("undocking")
+        await self._call_service(self._undock_client, "undock")
 
     def shutdown(self):
+        try:
+            if self._ros_executor:
+                self._ros_executor.shutdown()
+        except Exception:
+            pass
         try:
             if self._ros_node:
                 self._ros_node.destroy_node()

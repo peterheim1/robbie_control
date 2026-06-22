@@ -12,9 +12,9 @@ logger = logging.getLogger(__name__)
 
 import rclpy
 from rclpy.node import Node
-from std_msgs.msg import String, Empty, Float64MultiArray, Float32
+from std_msgs.msg import String, Empty, Float64MultiArray, Float32, Bool
 from geometry_msgs.msg import Twist
-from sensor_msgs.msg import CompressedImage
+from sensor_msgs.msg import CompressedImage, JointState
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 from builtin_interfaces.msg import Duration
 from diagnostic_msgs.msg import DiagnosticArray
@@ -36,11 +36,43 @@ def _json_safe(obj):
 class ROS2Dispatcher:
     """Publishes voice intents and commands to ROS 2 topics.
 
-    Runs rclpy in a background daemon thread. Publisher methods are
-    thread-safe and can be called from asyncio.
-
-    Subscribes to /voice/speak so external nodes can request TTS output.
+    Joint control uses the JointTrajectoryController topic interface
+    (/<ctrl>/joint_trajectory) — simpler than action clients, fire-and-forget.
     """
+
+    _JOINT_CONTROLLER_MAP: dict[str, str] = {
+        'head_yaw_joint':          'head_controller',
+        'head_roll':               'head_controller',
+        'head_pitch':              'head_controller',
+        'right_yaw_joint':         'right_arm_controller',
+        'right_lift_joint':        'right_arm_controller',
+        'right_rotate_joint':      'right_arm_controller',
+        'right_elbow_joint':       'right_arm_controller',
+        'right_wrist_yaw_joint':   'right_arm_controller',
+        'right_wrist_pitch_joint': 'right_arm_controller',
+        'left_yaw_joint':          'left_arm_controller',
+        'left_lift_joint':         'left_arm_controller',
+        'left_rotate_joint':       'left_arm_controller',
+        'left_elbow_joint':        'left_arm_controller',
+        'left_wrist_yaw_joint':    'left_arm_controller',
+        'left_wrist_pitch_joint':  'left_arm_controller',
+    }
+    _CONTROLLER_JOINTS: dict[str, list[str]] = {
+        'head_controller':      ['head_yaw_joint', 'head_roll', 'head_pitch'],
+        'right_arm_controller': ['right_yaw_joint', 'right_lift_joint', 'right_rotate_joint',
+                                 'right_elbow_joint', 'right_wrist_yaw_joint', 'right_wrist_pitch_joint'],
+        'left_arm_controller':  ['left_yaw_joint', 'left_lift_joint', 'left_rotate_joint',
+                                 'left_elbow_joint', 'left_wrist_yaw_joint', 'left_wrist_pitch_joint'],
+    }
+    # (right_joint, left_joint, sign) — sign flips the value when mirroring
+    _MIRROR_MAP: list[tuple[str, str, int]] = [
+        ('right_yaw_joint',         'left_yaw_joint',          -1),
+        ('right_lift_joint',        'left_lift_joint',           1),
+        ('right_rotate_joint',      'left_rotate_joint',        -1),
+        ('right_elbow_joint',       'left_elbow_joint',          1),
+        ('right_wrist_yaw_joint',   'left_wrist_yaw_joint',     -1),
+        ('right_wrist_pitch_joint', 'left_wrist_pitch_joint',    1),
+    ]
 
     def __init__(self, node_name: str = "robbie_voice", topic_config: dict | None = None):
         topics = topic_config or {}
@@ -77,7 +109,7 @@ class ROS2Dispatcher:
         self._sub_speak = self._node.create_subscription(
             String, self._topic_names["speak"], self._on_speak_msg, 10)
 
-        # Camera — latest compressed JPEG frame (updated from spin thread)
+        # Camera — latest JPEG frame from OAK-D compressed topic (updated from spin thread)
         self._latest_camera_frame: bytes | None = None
         self._sub_camera = self._node.create_subscription(
             CompressedImage, "/oak/rgb/image_raw/compressed",
@@ -87,12 +119,22 @@ class ROS2Dispatcher:
         self._battery_percentage: float | None = None
         self._battery_voltage: float | None = None
         self._is_docked: bool | None = None
+        self._is_charging: bool | None = None
         self._diagnostic_errors: list[str] = []
+        self._all_diagnostics: dict[str, dict] = {}  # keyed by name, merged across publishers
+        self._joint_positions: dict[str, float] = {}  # joint_name → radians
 
         self._sub_battery = self._node.create_subscription(
             Float32, "/battery_voltage", self._on_battery_voltage, 10)
+        self._sub_charge = self._node.create_subscription(
+            Bool, "/charge_state", self._on_charge_state, 10)
         self._sub_diagnostics = self._node.create_subscription(
             DiagnosticArray, "/diagnostics", self._on_diagnostics, 10)
+        self._sub_joint_states = self._node.create_subscription(
+            JointState, "/joint_states", self._on_joint_state, 10)
+
+        # Torque enable publisher for thor_joint
+        self._pub_torque = self._node.create_publisher(Bool, '/thor_joint/torque_enable', 10)
 
         # Dynamic publishers and service clients created on demand
         self._dynamic_pubs: dict = {}
@@ -125,7 +167,7 @@ class ROS2Dispatcher:
         self._speak_loop = loop
 
     def _on_camera_msg(self, msg: CompressedImage):
-        """Cache the latest JPEG frame (called from rclpy spin thread)."""
+        """Cache compressed JPEG frame (called from rclpy spin thread)."""
         self._latest_camera_frame = bytes(msg.data)
 
     def get_latest_camera_frame(self) -> bytes | None:
@@ -188,15 +230,19 @@ class ROS2Dispatcher:
     _DIAG_IGNORE = ("wdog", "watchdog", "high jitter", "high_jitter")
 
     def _on_diagnostics(self, msg: DiagnosticArray):
-        """Cache error/warn statuses from /diagnostics, excluding ignored checks."""
+        """Cache diagnostic statuses from /diagnostics."""
         errors = []
         for status in msg.status:
             name_lc = status.name.lower()
+            level = status.level[0] if isinstance(status.level, (bytes, bytearray)) else int(status.level)
+            self._all_diagnostics[status.name] = {
+                "name": status.name,
+                "level": level,
+                "message": status.message,
+                "hardware_id": status.hardware_id,
+            }
             if any(ig in name_lc for ig in self._DIAG_IGNORE):
                 continue
-            # DiagnosticStatus levels: 0=OK, 1=WARN, 2=ERROR, 3=STALE
-            # rclpy may return byte fields as bytes or int depending on version
-            level = status.level[0] if isinstance(status.level, (bytes, bytearray)) else int(status.level)
             if level >= 1:
                 label = "ERROR" if level >= 2 else "WARN"
                 errors.append(f"{status.name}: {status.message} [{label}]")
@@ -206,6 +252,10 @@ class ROS2Dispatcher:
         """Return cached diagnostic errors (wdog and high jitter excluded)."""
         return list(self._diagnostic_errors)
 
+    def get_all_diagnostics(self) -> list[dict]:
+        """Return all cached diagnostic statuses for the web UI."""
+        return list(self._all_diagnostics.values())
+
     def _on_battery_voltage(self, msg: Float32):
         self._battery_voltage = float(msg.data)
 
@@ -213,40 +263,22 @@ class ROS2Dispatcher:
         """Return cached battery voltage in volts, or None if unknown."""
         return self._battery_voltage
 
+    def _on_charge_state(self, msg: Bool):
+        self._is_charging = bool(msg.data)
+
+    def get_charge_state(self) -> bool | None:
+        """Return True if the robot is currently charging, or None if unknown."""
+        return self._is_charging
+
     def navigate_to(self, x: float, y: float, yaw_deg: float = 0.0):
-        """Send a NavigateToPose goal to Nav2 (fire-and-forget)."""
-        threading.Thread(
-            target=self._send_nav_goal,
-            args=(x, y, yaw_deg),
-            daemon=True,
-        ).start()
-
-    def _send_nav_goal(self, x: float, y: float, yaw_deg: float):
-        from nav2_msgs.action import NavigateToPose
-        from rclpy.action import ActionClient
-
-        if not hasattr(self, '_nav_action_client'):
-            self._nav_action_client = ActionClient(
-                self._node, NavigateToPose, '/navigate_to_pose')
-
-        if not self._nav_action_client.wait_for_server(timeout_sec=5.0):
-            logger.warning("Nav2 /navigate_to_pose not available")
-            return
-
-        goal = NavigateToPose.Goal()
-        goal.pose.header.frame_id = 'map'
-        goal.pose.header.stamp = self._node.get_clock().now().to_msg()
-        goal.pose.pose.position.x = float(x)
-        goal.pose.pose.position.y = float(y)
-        yaw_rad = math.radians(float(yaw_deg))
-        goal.pose.pose.orientation.z = math.sin(yaw_rad / 2.0)
-        goal.pose.pose.orientation.w = math.cos(yaw_rad / 2.0)
-
-        # Wait for goal acceptance only (spin thread processes the future callback)
-        done = threading.Event()
-        future = self._nav_action_client.send_goal_async(goal)
-        future.add_done_callback(lambda _: done.set())
-        done.wait(timeout=5.0)
+        """Send a goto_location command to Argus via /bt_command (fire-and-forget)."""
+        pub = self._get_dynamic_pub(String, "/bt_command")
+        msg = String()
+        msg.data = json.dumps({
+            "cmd": "goto_location",
+            "pose": {"x": float(x), "y": float(y), "yaw_deg": float(yaw_deg)},
+        })
+        pub.publish(msg)
 
     def dispatch_ros_actions(self, ros_actions: list) -> list[str]:
         """Publish each RosAction from commands.txt. Returns list of topics published."""
@@ -309,6 +341,26 @@ class ROS2Dispatcher:
             self._service_clients[key] = self._node.create_client(srv_type, service_name)
         return self._service_clients[key]
 
+    def slam_serialize_map(self, filename: str = '/home/pi/mar_19c_26') -> bool:
+        """Save the SLAM pose graph to filename (blocking). Returns True on success."""
+        try:
+            from slam_toolbox.srv import SerializePoseGraph
+        except ImportError:
+            logger.error("slam_toolbox srv not importable")
+            return False
+        client = self._get_service_client(SerializePoseGraph, '/slam_toolbox/serialize_map')
+        if not client.wait_for_service(timeout_sec=5.0):
+            logger.warning("Service /slam_toolbox/serialize_map not available")
+            return False
+        req = SerializePoseGraph.Request()
+        req.filename = filename
+        try:
+            resp = client.call(req)
+            return bool(resp.result)
+        except Exception as e:
+            logger.error(f"slam_serialize_map failed: {e}")
+            return False
+
     def _get_dynamic_pub(self, msg_type, topic: str):
         """Return a publisher for msg_type/topic, creating it on first use."""
         key = (msg_type, topic)
@@ -327,6 +379,109 @@ class ROS2Dispatcher:
     def get_published_topics(self) -> list[str]:
         """Return list of topic names this dispatcher publishes to."""
         return list(self._topic_names.values())
+
+    def _on_joint_state(self, msg: JointState):
+        for name, pos in zip(msg.name, msg.position):
+            if not math.isnan(pos):
+                self._joint_positions[name] = pos
+
+    def get_joint_states(self) -> dict[str, float]:
+        """Return current joint positions in degrees, keyed by joint name."""
+        return {name: math.degrees(rad) for name, rad in self._joint_positions.items()}
+
+    def send_joint_position(self, joint_name: str, deg: float,
+                            move_time_sec: float = 0.5) -> bool:
+        """Move one joint to deg°; hold all other joints in that controller at current positions."""
+        ctrl = self._JOINT_CONTROLLER_MAP.get(joint_name)
+        if not ctrl:
+            logger.warning(f"send_joint_position: unknown joint {joint_name!r}")
+            return False
+        joints = self._CONTROLLER_JOINTS[ctrl]
+        msg = JointTrajectory()
+        msg.joint_names = joints
+        pt = JointTrajectoryPoint()
+        for j in joints:
+            if j == joint_name:
+                pt.positions.append(math.radians(deg))
+            else:
+                pt.positions.append(self._joint_positions.get(j, 0.0))
+        sec = int(move_time_sec)
+        pt.time_from_start = Duration(sec=sec,
+                                      nanosec=int((move_time_sec - sec) * 1_000_000_000))
+        msg.points = [pt]
+        pub = self._get_dynamic_pub(JointTrajectory, f'/{ctrl}/joint_trajectory')
+        pub.publish(msg)
+        return True
+
+    def send_all_to_zero(self, move_time_sec: float = 1.0):
+        """Send all three controllers to the zero position."""
+        for ctrl, joints in self._CONTROLLER_JOINTS.items():
+            msg = JointTrajectory()
+            msg.joint_names = joints
+            pt = JointTrajectoryPoint()
+            pt.positions = [0.0] * len(joints)
+            sec = int(move_time_sec)
+            pt.time_from_start = Duration(sec=sec,
+                                          nanosec=int((move_time_sec - sec) * 1_000_000_000))
+            msg.points = [pt]
+            pub = self._get_dynamic_pub(JointTrajectory, f'/{ctrl}/joint_trajectory')
+            pub.publish(msg)
+
+    def send_all_joints(self, joint_dict: dict[str, float], move_time_sec: float = 1.0):
+        """Send a {joint_name: degrees} dict to their controllers.
+
+        Only controllers with at least one joint in joint_dict are messaged.
+        Joints in that controller but absent from joint_dict hold their current position.
+        """
+        ctrl_targets: dict[str, dict[str, float]] = {}
+        for name, deg in joint_dict.items():
+            ctrl = self._JOINT_CONTROLLER_MAP.get(name)
+            if ctrl:
+                ctrl_targets.setdefault(ctrl, {})[name] = deg
+        for ctrl, targets in ctrl_targets.items():
+            joints = self._CONTROLLER_JOINTS[ctrl]
+            msg = JointTrajectory()
+            msg.joint_names = joints
+            pt = JointTrajectoryPoint()
+            for j in joints:
+                if j in targets:
+                    pt.positions.append(math.radians(targets[j]))
+                else:
+                    pt.positions.append(self._joint_positions.get(j, 0.0))
+            sec = int(move_time_sec)
+            pt.time_from_start = Duration(sec=sec,
+                                          nanosec=int((move_time_sec - sec) * 1_000_000_000))
+            msg.points = [pt]
+            pub = self._get_dynamic_pub(JointTrajectory, f'/{ctrl}/joint_trajectory')
+            pub.publish(msg)
+
+    def speak(self, text: str):
+        """Publish text to the TTS topic."""
+        msg = String()
+        msg.data = text
+        self._pub_tts_text.publish(msg)
+
+    def set_servo_torque(self, enable: bool):
+        """Enable or disable torque on all arm/head servos via thor_joint."""
+        msg = Bool()
+        msg.data = enable
+        self._pub_torque.publish(msg)
+
+    def mirror_arm(self, direction: str, move_time_sec: float = 1.0):
+        """Mirror one arm onto the other.
+
+        direction: 'right_to_left' copies right arm → left arm (with axis sign flip)
+                   'left_to_right' copies left arm → right arm
+        """
+        target: dict[str, float] = {}
+        for r_joint, l_joint, sign in self._MIRROR_MAP:
+            if direction == 'right_to_left':
+                src_rad = self._joint_positions.get(r_joint, 0.0)
+                target[l_joint] = math.degrees(src_rad) * sign
+            else:
+                src_rad = self._joint_positions.get(l_joint, 0.0)
+                target[r_joint] = math.degrees(src_rad) * sign
+        self.send_all_joints(target, move_time_sec)
 
     def shutdown(self):
         """Shutdown rclpy and stop the spin thread."""

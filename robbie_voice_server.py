@@ -63,6 +63,10 @@ class RobbieVoiceServer:
         self._executor = ThreadPoolExecutor(max_workers=3)
         self._running = False
 
+        # Serializes TTS synthesis+send so concurrent /voice/speak messages
+        # don't interleave their audio on the TCP stream.
+        self._tts_lock = asyncio.Lock()
+
         # Components (initialized in startup)
         self._esphome: TCPAudioClient | None = None
         self._stt: STTEngine | None = None
@@ -74,6 +78,7 @@ class RobbieVoiceServer:
         self._task_runner: TaskRunner | None = None
         self._web = None
         self._wled: WLEDClient | None = None
+        self._wled_listening = False   # True while voice pipeline is active
         self._listen_lock = asyncio.Lock()
 
         # Config file paths
@@ -234,8 +239,9 @@ class RobbieVoiceServer:
         wled_cfg = self.config.get("wled", {})
         if wled_cfg.get("enabled", False):
             self._wled = WLEDClient(host=wled_cfg.get("host", "10.0.0.85"))
-            await self._wled.set_idle()
+            await self._update_idle_wled()
             self.console.log_info(f"WLED connected at {wled_cfg.get('host', '10.0.0.85')} (idle=green)")
+            asyncio.get_event_loop().create_task(self._battery_wled_loop())
 
         self.console.log_info("Robbie Voice Server ready")
         self.console.log_end()
@@ -249,9 +255,31 @@ class RobbieVoiceServer:
             "running": running,
         })
 
+    async def _update_idle_wled(self):
+        """Set WLED to the appropriate idle colour based on battery/charge state."""
+        if not self._wled:
+            return
+        self._wled_listening = False
+        charging = self._dispatcher.get_charge_state() if self._dispatcher else None
+        voltage  = self._dispatcher.get_battery_voltage() if self._dispatcher else None
+        if charging:
+            await self._wled.set_charging()
+        elif voltage is not None and voltage < 12.0:
+            await self._wled.set_low_battery()
+        else:
+            await self._wled.set_idle()
+
+    async def _battery_wled_loop(self):
+        """Periodically refresh WLED idle colour when not listening."""
+        while True:
+            await asyncio.sleep(30)
+            if not self._wled_listening:
+                await self._update_idle_wled()
+
     def _on_wake_word(self):
         """Called when wake word is detected."""
         self.console.log_wake()
+        self._wled_listening = True
         loop = asyncio.get_event_loop()
         loop.create_task(self._esphome.send_led_state(LED_WAKE))
         if self._wled:
@@ -286,6 +314,7 @@ class RobbieVoiceServer:
             Transcribed text, or empty string on silence / error.
         """
         async with self._listen_lock:
+            self._wled_listening = True
             loop = asyncio.get_event_loop()
             vad_cfg = self.config.get("vad", {})
             max_duration = min(timeout, vad_cfg.get("max_duration_ms", 10000) / 1000.0)
@@ -304,7 +333,7 @@ class RobbieVoiceServer:
 
             # Return to idle LEDs before processing
             if self._wled:
-                await self._wled.set_idle()
+                await self._update_idle_wled()
             await self._esphome.send_led_state(LED_IDLE)
 
             if not audio or len(audio) < 1600:
@@ -348,7 +377,7 @@ class RobbieVoiceServer:
                 await self.publish_event({"type": "intent", "name": "stop_all", "params": {}, "response": "stopping"})
                 await self._speak("stopping")
                 if self._wled:
-                    await self._wled.set_idle()
+                    await self._update_idle_wled()
                 await self._esphome.send_led_state(LED_IDLE)
                 await self.publish_event({"type": "status", "state": "listening"})
                 self.console.log_end()
@@ -361,7 +390,7 @@ class RobbieVoiceServer:
             self.console.log_error("No audio received")
             await self.publish_event({"type": "log", "level": "error", "msg": "No audio received"})
             if self._wled:
-                await self._wled.set_idle()
+                await self._update_idle_wled()
             await self._esphome.send_led_state(LED_IDLE)
             await self.publish_event({"type": "status", "state": "listening"})
             self.console.log_end()
@@ -527,21 +556,25 @@ class RobbieVoiceServer:
 
     async def _speak(self, text: str):
         """Synthesize and play TTS audio (skipped if silent mode is on)."""
+        if self._tts is None:
+            self.console.log_warning("TTS not ready, dropping speak request")
+            return
         loop = asyncio.get_event_loop()
         self.console.log_response(text)
         muted = self._web is not None and self._web.tts_muted
         await self.publish_event({"type": "tts", "text": text, "muted": muted})
         if muted:
             return
-        try:
-            audio = await loop.run_in_executor(
-                self._executor, self._tts.synthesize, text
-            )
-            if audio and self._esphome:
-                await self._esphome.send_tts_audio(audio)
-        except Exception as e:
-            self.console.log_error(f"TTS failed: {e}")
-            await self.publish_event({"type": "log", "level": "error", "msg": f"TTS failed: {e}"})
+        async with self._tts_lock:
+            try:
+                audio = await loop.run_in_executor(
+                    self._executor, self._tts.synthesize, text
+                )
+                if audio and self._esphome:
+                    await self._esphome.send_tts_audio(audio)
+            except Exception as e:
+                self.console.log_error(f"TTS failed: {e}")
+                await self.publish_event({"type": "log", "level": "error", "msg": f"TTS failed: {e}"})
 
     async def run(self):
         """Main run loop."""

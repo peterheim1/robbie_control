@@ -6,13 +6,13 @@ audio_source: "local_mic"
 local_mic:
   device: null                # null = PipeWire/PulseAudio default (AM4137 USB mic)
   tts_device: null            # null = default output device
-  wake_word_model: "hey_jarvis"
-  wake_word_threshold: 0.85   # matches working example
+  wake_word_model: "/home/pi/ros2_ws/src/robbie_control/hey_robbie.onnx"
+  wake_word_threshold: 0.5
 
 tcp_audio:
   listen_host: "0.0.0.0"
   listen_port: 8765
-  wake_word_model: "hey_jarvis"
+  wake_word_model: "/home/pi/ros2_ws/src/robbie_control/hey_robbie.onnx"
   wake_word_threshold: 0.5
 
 stt:

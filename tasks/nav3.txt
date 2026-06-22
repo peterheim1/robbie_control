@@ -1,3 +1,4 @@
+TASK:Undock
 NAV:TV
 TASK:MakeSound:Can I watch TV
 TASK:Wait
@@ -14,3 +15,4 @@ NAV:Charging Station
 TASK:Wait
 TASK:MakeSound:time for a top up
 TASK:Dock
+TASK:MakeSound:Docked

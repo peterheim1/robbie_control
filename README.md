@@ -66,7 +66,7 @@ USB Mic / TCP audio (ESP32)
 | Task runner | `task_runner.py` | Executes named `.txt` task sequences |
 | Web server | `web_server.py` | FastAPI control panel + docs search + camera feed |
 | Docs engine | `docs_engine.py` | TF-IDF search over `.md` files + LLM streaming answers |
-| WLED client | `wled_client.py` | LED bar (green=idle, magenta=listening) |
+| WLED client | `wled_client.py` | LED bar (green=idle, magenta=listening, blue=charging, red=low battery) |
 | TCP audio | `tcp_audio_client.py` | Receives PCM from ESP32 ReSpeaker over WiFi |
 | Local mic | `local_mic_client.py` | USB mic input with on-device wake word |
 | Console logger | `console_logger.py` | Coloured terminal output |
@@ -111,7 +111,7 @@ web:
 
 wled:
   enabled: true
-  host: "10.0.0.85"
+  host: "10.0.0.85"   # green=idle, magenta=listening, blue=charging, red=battery<12V
 
 tasks:
   dir: "/home/pi/ros2_ws/src/robbie_control/tasks"
@@ -233,6 +233,7 @@ See `web_interface_FSD.md` for full WebSocket event/command protocol.
 | `/head_controller/joint_trajectory` | `trajectory_msgs/JointTrajectory` | Publish | Head pan/tilt |
 | `/voice/speak` | `std_msgs/String` | Subscribe | External nodes trigger TTS |
 | `/battery_voltage` | `std_msgs/Float32` | Subscribe | Battery voltage (from base_driver) |
+| `/charge_state` | `std_msgs/Bool` | Subscribe | True when robot is on charge (from base_driver) |
 | `/diagnostics` | `diagnostic_msgs/DiagnosticArray` | Subscribe | System health |
 | `/oak/rgb/image_raw/compressed` | `sensor_msgs/CompressedImage` | Subscribe | Camera feed for web UI |
 

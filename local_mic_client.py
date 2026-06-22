@@ -15,6 +15,7 @@ Same interface as TCPAudioClient:
 
 import asyncio
 import logging
+import queue
 import sys
 import threading
 
@@ -66,7 +67,8 @@ class LocalMicClient:
         self._ww_threshold = wake_word_threshold
 
         self._oww: OWWModel | None = None
-        self._oww_buf = bytearray()
+        self._oww_queue: queue.Queue = queue.Queue(maxsize=200)
+        self._oww_thread: threading.Thread | None = None
 
         self._vad = webrtcvad.Vad(3)
 
@@ -94,6 +96,11 @@ class LocalMicClient:
         )
         logger.info("openwakeword model loaded")
 
+        self._oww_thread = threading.Thread(
+            target=self._oww_worker, daemon=True, name="oww-worker"
+        )
+        self._oww_thread.start()
+
         device_info = sd.query_devices(self._device, "input")
         logger.info(f"Using mic: {device_info['name']}")
 
@@ -113,45 +120,84 @@ class LocalMicClient:
         if status:
             logger.warning(f"Audio input status: {status}")
         audio_bytes = indata.flatten().tobytes()
-        if self._loop:
-            asyncio.run_coroutine_threadsafe(
-                self._process_mic_audio(audio_bytes), self._loop
-            )
-
-    async def _process_mic_audio(self, data: bytes):
-        """Process incoming mic audio: wake word detection or recording."""
         if self._is_recording:
-            self._audio_buffer.extend(data)
-            self._check_vad(data)
-            return
-
-        # Feed to openwakeword in 80ms chunks
-        self._oww_buf.extend(data)
-        while len(self._oww_buf) >= OWW_CHUNK_BYTES:
-            chunk = bytes(self._oww_buf[:OWW_CHUNK_BYTES])
-            del self._oww_buf[:OWW_CHUNK_BYTES]
-
-            samples = np.frombuffer(chunk, dtype=np.int16)
-            self._debug_counter = getattr(self, "_debug_counter", 0) + 1
-            if self._debug_counter % 50 == 0:
-                logger.debug(
-                    f"audio stats: min={samples.min()} max={samples.max()} "
-                    f"rms={np.sqrt(np.mean(samples.astype(np.float32)**2)):.0f} "
-                    f"len={len(samples)}"
+            if self._loop:
+                asyncio.run_coroutine_threadsafe(
+                    self._buffer_recording(audio_bytes), self._loop
                 )
-            prediction = self._oww.predict(samples)
+        else:
+            try:
+                self._oww_queue.put_nowait(audio_bytes)
+            except queue.Full:
+                pass  # drop chunk rather than stall the audio thread
 
-            for model_name, score in prediction.items():
-                if score > 0.1 or self._debug_counter % 50 == 0:
-                    logger.debug(f"oww: {model_name}={score:.3f}")
-                if score >= self._ww_threshold:
-                    logger.info(f"Wake word '{model_name}' detected (score={score:.3f})")
-                    self._oww.reset()
-                    self._oww_buf.clear()
-                    self._start_recording()
-                    if self.on_wake_word:
-                        self.on_wake_word()
-                    return
+    async def _buffer_recording(self, data: bytes):
+        """Buffer mic audio and run VAD during an active recording."""
+        self._audio_buffer.extend(data)
+        self._check_vad(data)
+
+    def _oww_worker(self):
+        """Dedicated thread for real-time openwakeword processing.
+
+        Runs synchronously like the test script so chunks are fed to the
+        model immediately, without waiting for the asyncio event loop.
+        """
+        oww_buf = bytearray()
+        debug_counter = 0
+
+        while True:
+            try:
+                data = self._oww_queue.get(timeout=0.5)
+            except queue.Empty:
+                continue
+
+            if data is None:  # shutdown sentinel
+                break
+
+            if self._is_recording:
+                oww_buf.clear()
+                continue
+
+            oww_buf.extend(data)
+            while len(oww_buf) >= OWW_CHUNK_BYTES:
+                chunk = bytes(oww_buf[:OWW_CHUNK_BYTES])
+                del oww_buf[:OWW_CHUNK_BYTES]
+
+                samples = np.frombuffer(chunk, dtype=np.int16)
+                debug_counter += 1
+                if debug_counter % 50 == 0:
+                    logger.debug(
+                        f"audio stats: min={samples.min()} max={samples.max()} "
+                        f"rms={np.sqrt(np.mean(samples.astype(np.float32)**2)):.0f} "
+                        f"len={len(samples)}"
+                    )
+
+                prediction = self._oww.predict(samples)
+                for model_name, score in prediction.items():
+                    if score > 0.1 or debug_counter % 50 == 0:
+                        logger.debug(f"oww: {model_name}={score:.3f}")
+                    if score >= self._ww_threshold:
+                        logger.info(
+                            f"Wake word '{model_name}' detected (score={score:.3f})"
+                        )
+                        self._oww.reset()
+                        oww_buf.clear()
+                        # drain stale audio so it doesn't corrupt the next detection
+                        while not self._oww_queue.empty():
+                            try:
+                                self._oww_queue.get_nowait()
+                            except queue.Empty:
+                                break
+                        # dispatch back to the event loop for recording + callback
+                        if self._loop:
+                            self._loop.call_soon_threadsafe(self._on_wake_detected)
+                        break
+
+    def _on_wake_detected(self):
+        """Called on the event loop thread when the OWW worker fires."""
+        self._start_recording()
+        if self.on_wake_word:
+            self.on_wake_word()
 
     def _start_recording(self):
         """Begin recording audio for the current utterance."""
@@ -235,11 +281,12 @@ class LocalMicClient:
         pass
 
     async def disconnect(self):
-        """Stop the microphone stream."""
+        """Stop the microphone stream and OWW worker thread."""
         if self._stream:
             self._stream.stop()
             self._stream.close()
             self._stream = None
+        self._oww_queue.put_nowait(None)  # signal worker to exit
         logger.info("Local microphone stopped")
 
 

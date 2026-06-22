@@ -12,8 +12,10 @@ import urllib.request
 
 logger = logging.getLogger(__name__)
 
-COLOR_GREEN = [0, 255, 0]
+COLOR_GREEN   = [0, 255, 0]
 COLOR_MAGENTA = [255, 0, 255]
+COLOR_BLUE    = [0, 80, 255]
+COLOR_RED     = [255, 20, 0]
 
 
 class WLEDClient:
@@ -30,6 +32,14 @@ class WLEDClient:
     async def set_listening(self):
         """Magenta — actively capturing a voice response."""
         await self._set_color(COLOR_MAGENTA)
+
+    async def set_charging(self):
+        """Blue — robot is on charge."""
+        await self._set_color(COLOR_BLUE, brightness=100)
+
+    async def set_low_battery(self):
+        """Red — battery below 12 V."""
+        await self._set_color(COLOR_RED)
 
     async def _set_color(self, rgb: list, brightness: int = 200):
         payload = {"on": True, "bri": brightness, "seg": [{"col": [rgb]}]}
