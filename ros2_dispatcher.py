@@ -270,12 +270,30 @@ class ROS2Dispatcher:
         """Return True if the robot is currently charging, or None if unknown."""
         return self._is_charging
 
-    def navigate_to(self, x: float, y: float, yaw_deg: float = 0.0):
-        """Send a goto_location command to Argus via /bt_command (fire-and-forget)."""
+    def publish_speak_done(self, text: str):
+        """Notify Argus that a /voice/speak request has finished playing.
+
+        Argus's Speak BT node blocks on this (via a blackboard sequence
+        counter) before letting the next node in the sequence — e.g. Undock,
+        NavigateTo — run, so the robot doesn't start moving mid-sentence.
+        """
+        pub = self._get_dynamic_pub(String, "/voice/speak_done")
+        msg = String()
+        msg.data = text
+        pub.publish(msg)
+
+    def navigate_to(self, x: float, y: float, yaw_deg: float = 0.0, location: str = ""):
+        """Send a goto_location command to Argus via /bt_command (fire-and-forget).
+
+        `location` is included so Argus's cmd_cb doesn't clobber the
+        target_location set moments earlier by the /voice/intent message
+        (see intent_cb) with an empty string.
+        """
         pub = self._get_dynamic_pub(String, "/bt_command")
         msg = String()
         msg.data = json.dumps({
             "cmd": "goto_location",
+            "location": location,
             "pose": {"x": float(x), "y": float(y), "yaw_deg": float(yaw_deg)},
         })
         pub.publish(msg)

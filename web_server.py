@@ -409,7 +409,7 @@ _HTML = """<!DOCTYPE html>
       background:rgba(0,0,0,.65);align-items:center;justify-content:center}
     #behEditorOverlay.open{display:flex}
     #behEditorBox{background:#161b22;border:1px solid #30363d;border-radius:10px;
-      width:min(520px,96vw);max-height:88vh;display:flex;flex-direction:column;
+      width:min(800px,96vw);max-height:92vh;display:flex;flex-direction:column;
       box-shadow:0 8px 32px rgba(0,0,0,.7)}
     .beh-ed-hdr{display:flex;justify-content:space-between;align-items:center;
       padding:10px 16px;border-bottom:1px solid #30363d;background:#21262d;
@@ -432,9 +432,9 @@ _HTML = """<!DOCTYPE html>
     #behEditorSteps{display:flex;flex-direction:column;gap:4px}
     .beh-step-row{display:flex;align-items:center;gap:5px;padding:4px 6px;
       background:#0d1117;border:1px solid #21262d;border-radius:5px}
-    .beh-step-num{font-size:10px;color:#484f58;width:14px;flex-shrink:0;text-align:right}
-    .beh-step-type{width:74px;background:#0d1117;border:1px solid #21262d;border-radius:3px;
-      color:#8b949e;font-family:inherit;font-size:10px;padding:2px 3px;outline:none;flex-shrink:0}
+    .beh-step-num{font-size:12px;color:#6e7681;width:20px;flex-shrink:0;text-align:right}
+    .beh-step-type{width:86px;background:#0d1117;border:1px solid #21262d;border-radius:3px;
+      color:#8b949e;font-family:inherit;font-size:12px;padding:3px 4px;outline:none;flex-shrink:0}
     .beh-step-type:focus{border-color:#58a6ff}
     .beh-step-row.beh-type-behaviour{border-color:#7c3aed;background:#130d1e}
     .beh-step-sub-sel{flex:1;min-width:0;background:#0d1117;border:1px solid #7c3aed;border-radius:3px;
@@ -442,31 +442,42 @@ _HTML = """<!DOCTYPE html>
     .beh-step-sub-sel:focus{border-color:#c792ea}
     .beh-step-fields{display:flex;align-items:center;gap:5px;flex:1;min-width:0}
     .beh-step-pose{flex:1;min-width:0;background:#0d1117;border:1px solid #21262d;border-radius:3px;
-      color:#c9d1d9;font-family:inherit;font-size:11px;padding:2px 4px;outline:none}
+      color:#c9d1d9;font-family:inherit;font-size:12px;padding:3px 5px;outline:none}
     .beh-step-pose:focus{border-color:#58a6ff}
-    .beh-step-mt{width:44px;background:#0d1117;border:1px solid #21262d;border-radius:3px;
-      color:#e6edf3;font-family:'Courier New',monospace;font-size:11px;
-      padding:2px 4px;text-align:right;outline:none;flex-shrink:0}
+    .beh-step-mt{width:52px;background:#0d1117;border:1px solid #21262d;border-radius:3px;
+      color:#e6edf3;font-family:'Courier New',monospace;font-size:12px;
+      padding:3px 5px;text-align:right;outline:none;flex-shrink:0}
     .beh-step-mt:focus{border-color:#58a6ff}
-    .beh-step-rep{width:32px;background:#0d1117;border:1px solid #21262d;border-radius:3px;
-      color:#e6edf3;font-family:'Courier New',monospace;font-size:11px;
-      padding:2px 4px;text-align:right;outline:none;flex-shrink:0}
+    .beh-step-rep{width:38px;background:#0d1117;border:1px solid #21262d;border-radius:3px;
+      color:#e6edf3;font-family:'Courier New',monospace;font-size:12px;
+      padding:3px 4px;text-align:right;outline:none;flex-shrink:0}
     .beh-step-rep:focus{border-color:#58a6ff}
     .beh-step-speak-text{flex:1;min-width:0;background:#0d1117;border:1px solid #21262d;
-      border-radius:3px;color:#c9d1d9;font-family:inherit;font-size:11px;padding:2px 4px;outline:none}
+      border-radius:3px;color:#c9d1d9;font-family:inherit;font-size:12px;padding:3px 5px;outline:none}
     .beh-step-speak-text:focus{border-color:#58a6ff}
-    .beh-step-num-input{width:44px;background:#0d1117;border:1px solid #21262d;border-radius:3px;
-      color:#e6edf3;font-family:'Courier New',monospace;font-size:11px;
-      padding:2px 4px;text-align:right;outline:none;flex-shrink:0}
+    .beh-step-num-input{width:52px;background:#0d1117;border:1px solid #21262d;border-radius:3px;
+      color:#e6edf3;font-family:'Courier New',monospace;font-size:12px;
+      padding:3px 5px;text-align:right;outline:none;flex-shrink:0}
     .beh-step-num-input:focus{border-color:#58a6ff}
-    .beh-step-lbl{font-size:10px;color:#484f58;flex-shrink:0}
-    .beh-step-ord{background:none;border:none;color:#484f58;cursor:pointer;font-size:11px;
-      padding:0 2px;line-height:1;flex-shrink:0}
-    .beh-step-ord:hover:not(:disabled){color:#8b949e}
+    .beh-step-lbl{font-size:12px;color:#6e7681;flex-shrink:0}
+    .beh-step-ord{background:none;border:1px solid #30363d;border-radius:3px;color:#6e7681;
+      cursor:pointer;font-size:13px;padding:2px 5px;line-height:1;flex-shrink:0}
+    .beh-step-ord:hover:not(:disabled){color:#c9d1d9;border-color:#8b949e}
     .beh-step-ord:disabled{opacity:.2;cursor:default}
-    .beh-step-del{background:none;border:none;color:#484f58;cursor:pointer;font-size:13px;
-      padding:0 2px;line-height:1;flex-shrink:0}
+    .beh-step-del{background:none;border:none;color:#6e7681;cursor:pointer;font-size:15px;
+      padding:0 4px;line-height:1;flex-shrink:0}
     .beh-step-del:hover{color:#f85149}
+    .beh-col-hdr{display:none;align-items:center;gap:5px;padding:2px 6px 4px;
+      border-bottom:1px solid #21262d;margin-bottom:4px}
+    .beh-col-hdr.visible{display:flex}
+    .beh-col-hdr span{font-size:10px;color:#484f58;text-transform:uppercase;letter-spacing:.05em}
+    .beh-col-n{width:20px;flex-shrink:0;text-align:right}
+    .beh-col-t{width:86px;flex-shrink:0}
+    .beh-col-d{flex:1;min-width:0}
+    .beh-col-s{width:52px;flex-shrink:0;text-align:center}
+    .beh-col-r{width:38px;flex-shrink:0;text-align:center}
+    .beh-col-o{width:62px;flex-shrink:0}
+    .beh-col-x{width:24px;flex-shrink:0}
     .beh-ed-footer{display:flex;justify-content:flex-end;gap:8px;padding:10px 16px;
       border-top:1px solid #30363d;background:#21262d;border-radius:0 0 10px 10px;flex-shrink:0}
     .beh-ed-cancel{background:none;border:1px solid #30363d;color:#6e7681;font-family:inherit;
@@ -789,6 +800,15 @@ _HTML = """<!DOCTYPE html>
       <div class="beh-steps-hdr">
         <span class="beh-steps-lbl">Steps</span>
         <button class="beh-add-btn" onclick="addBehStep()">+ Add Step</button>
+      </div>
+      <div id="behColHdr" class="beh-col-hdr">
+        <span class="beh-col-n">#</span>
+        <span class="beh-col-t">Type</span>
+        <span class="beh-col-d">Pose / Text / Delay</span>
+        <span class="beh-col-s">Sec</span>
+        <span class="beh-col-r">×</span>
+        <span class="beh-col-o">Order</span>
+        <span class="beh-col-x"></span>
       </div>
       <div id="behEditorSteps"></div>
       <div id="behNoSteps" style="font-size:12px;color:#6e7681;padding:4px 0">No steps — click Add Step.</div>
@@ -1951,8 +1971,10 @@ _HTML = """<!DOCTYPE html>
   function renderBehSteps(steps) {
     const container = document.getElementById('behEditorSteps');
     const noSteps   = document.getElementById('behNoSteps');
+    const colHdr    = document.getElementById('behColHdr');
     container.innerHTML = '';
     if (noSteps) noSteps.style.display = steps.length ? 'none' : 'block';
+    if (colHdr) colHdr.classList.toggle('visible', steps.length > 0);
     steps.forEach((step, i) => {
       const row = document.createElement('div');
       row.className = 'beh-step-row';
@@ -1984,17 +2006,21 @@ _HTML = """<!DOCTYPE html>
         fields = newFields;
         _applyRowType(typeSel.value);
       });
+      // Order buttons in a fixed-width wrapper so they never overlap fields
+      const ordWrap = document.createElement('span');
+      ordWrap.style.cssText = 'display:flex;gap:3px;flex-shrink:0';
       const upBtn = document.createElement('button');
       upBtn.className = 'beh-step-ord'; upBtn.textContent = '↑'; upBtn.disabled = (i === 0);
       upBtn.addEventListener('click', () => moveBehStep(i, -1));
       const dnBtn = document.createElement('button');
       dnBtn.className = 'beh-step-ord'; dnBtn.textContent = '↓'; dnBtn.disabled = (i === steps.length - 1);
       dnBtn.addEventListener('click', () => moveBehStep(i, +1));
+      ordWrap.appendChild(upBtn); ordWrap.appendChild(dnBtn);
       const delBtn = document.createElement('button');
       delBtn.className = 'beh-step-del'; delBtn.innerHTML = '&#x2715;';
       delBtn.addEventListener('click', () => deleteBehStep(i));
       row.appendChild(num); row.appendChild(typeSel); row.appendChild(fields);
-      row.appendChild(upBtn); row.appendChild(dnBtn); row.appendChild(delBtn);
+      row.appendChild(ordWrap); row.appendChild(delBtn);
       container.appendChild(row);
     });
   }

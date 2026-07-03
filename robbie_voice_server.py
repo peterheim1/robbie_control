@@ -461,7 +461,7 @@ class RobbieVoiceServer:
             x = intent.params.get("x", 0.0)
             y = intent.params.get("y", 0.0)
             yaw_deg = intent.params.get("yaw_deg", 0.0)
-            self._dispatcher.navigate_to(x, y, yaw_deg)
+            self._dispatcher.navigate_to(x, y, yaw_deg, location)
             return f"navigating to {location}"
 
         if intent.name == "query_datetime":
@@ -572,9 +572,17 @@ class RobbieVoiceServer:
                 )
                 if audio and self._esphome:
                     await self._esphome.send_tts_audio(audio)
+                    # 16-bit mono PCM — estimate real playback duration so the
+                    # "done" ack (which Argus's Speak node blocks on) lands
+                    # roughly when the ESP32 actually finishes the audio, not
+                    # just when the bytes were handed off.
+                    duration_s = len(audio) / 2 / self._tts.output_sample_rate
+                    await asyncio.sleep(duration_s)
+                self._dispatcher.publish_speak_done(text)
             except Exception as e:
                 self.console.log_error(f"TTS failed: {e}")
                 await self.publish_event({"type": "log", "level": "error", "msg": f"TTS failed: {e}"})
+                self._dispatcher.publish_speak_done(text)
 
     async def run(self):
         """Main run loop."""
