@@ -57,7 +57,10 @@ tasks:
 wled:
   enabled: true
   host: "10.0.0.85"            # WLED segment bar IP
-  # idle = green, listening = magenta
+  # seg 0 (eyes, 2px):   idle = green, listening = magenta
+  # seg 1 (mouth, 8px):  outside-in pink chase while speaking
+  # seg 2 (status, 27px): blue = normal/charging, aqua = 12.0-12.8V,
+  #                        red = <12V, blinking red = active fault
 
 ros2:
   node_name: "robbie_voice"

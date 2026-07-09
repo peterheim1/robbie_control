@@ -16,6 +16,7 @@ import argparse
 import asyncio
 import dataclasses
 import logging
+import re
 import signal
 import sys
 from concurrent.futures import ThreadPoolExecutor
@@ -39,6 +40,31 @@ logger = logging.getLogger(__name__)
 
 # Bytes of audio for ~0.5s at 16kHz 16-bit mono
 STOP_CHECK_BYTES = 16000
+
+# Matched anywhere in the transcript (not just at the start) so a leading
+# filler word ("uh", "um") from STT doesn't defeat the match.
+_NAME_LEADIN_RE = re.compile(
+    r"(?:my name is|i am|i'm|im|this is|it'?s|call me|name'?s|the name is)\s+(.+)$",
+    re.IGNORECASE,
+)
+_NAME_FILLER_WORDS = {"uh", "um", "i", "think", "and", "so", "well", "the", "a"}
+
+
+def _extract_name(text: str) -> str:
+    """Extract a name from a spoken reply, stripping common lead-in phrases.
+
+    Falls back to the raw transcript if no lead-in phrase matches (the user
+    may have just said their name alone). Filler words are dropped and at
+    most two words are kept, so trailing chatter ("...i think") doesn't get
+    captured as part of the name.
+    """
+    cleaned = text.strip().strip(".!?").strip()
+    if not cleaned:
+        return ""
+    match = _NAME_LEADIN_RE.search(cleaned)
+    candidate = match.group(1) if match else cleaned
+    words = [w for w in candidate.split() if w.lower() not in _NAME_FILLER_WORDS][:2]
+    return " ".join(w.capitalize() for w in words)
 
 
 def _json_safe(obj):
@@ -105,6 +131,11 @@ class RobbieVoiceServer:
         # Wire /voice/speak → TTS so external nodes can speak text
         self._dispatcher.set_speak_callback(
             self._speak, asyncio.get_event_loop()
+        )
+        # Wire /voice/ask_and_listen → ask a question, listen for the reply,
+        # and cue face enrollment (used by Argus's meet & greet)
+        self._dispatcher.set_ask_and_listen_callback(
+            self._ask_and_listen_for_name, asyncio.get_event_loop()
         )
 
         # 2. STT engines (CUDA)
@@ -240,8 +271,10 @@ class RobbieVoiceServer:
         if wled_cfg.get("enabled", False):
             self._wled = WLEDClient(host=wled_cfg.get("host", "10.0.0.85"))
             await self._update_idle_wled()
-            self.console.log_info(f"WLED connected at {wled_cfg.get('host', '10.0.0.85')} (idle=green)")
-            asyncio.get_event_loop().create_task(self._battery_wled_loop())
+            await self._wled.set_mouth_off()
+            await self._update_status_wled()
+            self.console.log_info(f"WLED connected at {wled_cfg.get('host', '10.0.0.85')} (eyes=green)")
+            asyncio.get_event_loop().create_task(self._status_wled_loop())
 
         self.console.log_info("Robbie Voice Server ready")
         self.console.log_end()
@@ -256,25 +289,26 @@ class RobbieVoiceServer:
         })
 
     async def _update_idle_wled(self):
-        """Set WLED to the appropriate idle colour based on battery/charge state."""
+        """Set the eyes segment to idle green (segment 0)."""
         if not self._wled:
             return
         self._wled_listening = False
+        await self._wled.set_eyes_idle()
+
+    async def _update_status_wled(self):
+        """Set the status segment (segment 2) from battery voltage / active faults."""
+        if not self._wled:
+            return
         charging = self._dispatcher.get_charge_state() if self._dispatcher else None
         voltage  = self._dispatcher.get_battery_voltage() if self._dispatcher else None
-        if charging:
-            await self._wled.set_charging()
-        elif voltage is not None and voltage < 12.0:
-            await self._wled.set_low_battery()
-        else:
-            await self._wled.set_idle()
+        has_problem = bool(self._dispatcher.get_system_errors()) if self._dispatcher else False
+        await self._wled.set_status(voltage, bool(charging), has_problem)
 
-    async def _battery_wled_loop(self):
-        """Periodically refresh WLED idle colour when not listening."""
+    async def _status_wled_loop(self):
+        """Periodically refresh the status segment — independent of eyes/listening state."""
         while True:
-            await asyncio.sleep(30)
-            if not self._wled_listening:
-                await self._update_idle_wled()
+            await self._update_status_wled()
+            await asyncio.sleep(10)
 
     def _on_wake_word(self):
         """Called when wake word is detected."""
@@ -283,7 +317,7 @@ class RobbieVoiceServer:
         loop = asyncio.get_event_loop()
         loop.create_task(self._esphome.send_led_state(LED_WAKE))
         if self._wled:
-            loop.create_task(self._wled.set_listening())
+            loop.create_task(self._wled.set_eyes_listening())
         loop.create_task(self._handle_pipeline())
 
     async def publish_event(self, event: dict):
@@ -321,7 +355,7 @@ class RobbieVoiceServer:
 
             # Signal listening state
             if self._wled:
-                await self._wled.set_listening()
+                await self._wled.set_eyes_listening()
             await self._esphome.send_led_state(LED_WAKE)
             await self.publish_event({"type": "status", "state": "recording"})
 
@@ -349,6 +383,25 @@ class RobbieVoiceServer:
             await self.publish_event({"type": "transcript", "text": text, "source": "listen"})
             await self.publish_event({"type": "status", "state": "listening"})
             return text
+
+    async def _ask_and_listen_for_name(self, question: str):
+        """Ask a question via TTS, listen for a spoken name, cue enrollment.
+
+        Triggered by /voice/ask_and_listen (Argus's meet & greet asks an
+        unrecognized face for their name). Waits for the question to finish
+        playing before opening the mic, extracts the name from the reply,
+        publishes a train_face intent on /voice/intent, and greets them.
+        """
+        await self._speak(question)
+        transcript = await self.listen_for_answer(timeout=8.0)
+        name = _extract_name(transcript)
+        if not name:
+            self.console.log_error("ask_and_listen: no name captured")
+            await self._speak("Sorry, I didn't catch your name")
+            return
+        self.console.log_info(f"ask_and_listen: captured name '{name}'")
+        self._dispatcher.publish_train_face(name)
+        await self._speak(f"Hello {name}, nice to meet you")
 
     async def _handle_pipeline(self):
         """Handle a complete voice pipeline: audio → STT → intent → dispatch → TTS."""
@@ -408,7 +461,7 @@ class RobbieVoiceServer:
         await self._process_text(text, source="voice")
 
         if self._wled:
-            await self._wled.set_idle()
+            await self._wled.set_eyes_idle()
         await self._esphome.send_led_state(LED_IDLE)
         await self.publish_event({"type": "status", "state": "listening"})
         self.console.log_end()
@@ -571,13 +624,14 @@ class RobbieVoiceServer:
                     self._executor, self._tts.synthesize, text
                 )
                 if audio and self._esphome:
-                    await self._esphome.send_tts_audio(audio)
-                    # 16-bit mono PCM — estimate real playback duration so the
-                    # "done" ack (which Argus's Speak node blocks on) lands
-                    # roughly when the ESP32 actually finishes the audio, not
-                    # just when the bytes were handed off.
-                    duration_s = len(audio) / 2 / self._tts.output_sample_rate
-                    await asyncio.sleep(duration_s)
+                    # send_tts_audio() blocks until local playback (sd.wait())
+                    # actually finishes, so the ack below already lands at the
+                    # right time — no extra sleep needed.
+                    if self._wled:
+                        async with self._wled.talking():
+                            await self._esphome.send_tts_audio(audio)
+                    else:
+                        await self._esphome.send_tts_audio(audio)
                 self._dispatcher.publish_speak_done(text)
             except Exception as e:
                 self.console.log_error(f"TTS failed: {e}")
