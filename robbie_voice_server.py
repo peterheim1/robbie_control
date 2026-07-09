@@ -14,6 +14,7 @@ Usage:
 
 import argparse
 import asyncio
+import contextlib
 import dataclasses
 import logging
 import re
@@ -40,6 +41,11 @@ logger = logging.getLogger(__name__)
 
 # Bytes of audio for ~0.5s at 16kHz 16-bit mono
 STOP_CHECK_BYTES = 16000
+
+# head_roll wobble while talking — URDF limit is +-30 deg (0.5236 rad), stay well inside it
+HEAD_TALK_ROLL_DEG = 8.0
+HEAD_TALK_STEP_SECS = 0.6
+HEAD_TALK_MOVE_SECS = 0.5
 
 # Matched anywhere in the transcript (not just at the start) so a leading
 # filler word ("uh", "um") from STT doesn't defeat the match.
@@ -607,6 +613,27 @@ class RobbieVoiceServer:
             return "I'm doing well, all systems are running"
         return f"I don't have {subject} information right now"
 
+    @contextlib.asynccontextmanager
+    async def _head_talking(self):
+        """Wobble head_roll back and forth for the duration of the block."""
+        task = asyncio.get_event_loop().create_task(self._head_talk_wobble())
+        try:
+            yield
+        finally:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+            self._dispatcher.send_joint_position(
+                "head_roll", 0.0, move_time_sec=HEAD_TALK_MOVE_SECS)
+
+    async def _head_talk_wobble(self):
+        sign = 1
+        while True:
+            self._dispatcher.send_joint_position(
+                "head_roll", sign * HEAD_TALK_ROLL_DEG, move_time_sec=HEAD_TALK_MOVE_SECS)
+            sign *= -1
+            await asyncio.sleep(HEAD_TALK_STEP_SECS)
+
     async def _speak(self, text: str):
         """Synthesize and play TTS audio (skipped if silent mode is on)."""
         if self._tts is None:
@@ -627,10 +654,10 @@ class RobbieVoiceServer:
                     # send_tts_audio() blocks until local playback (sd.wait())
                     # actually finishes, so the ack below already lands at the
                     # right time — no extra sleep needed.
-                    if self._wled:
-                        async with self._wled.talking():
-                            await self._esphome.send_tts_audio(audio)
-                    else:
+                    async with contextlib.AsyncExitStack() as stack:
+                        if self._wled:
+                            await stack.enter_async_context(self._wled.talking())
+                        await stack.enter_async_context(self._head_talking())
                         await self._esphome.send_tts_audio(audio)
                 self._dispatcher.publish_speak_done(text)
             except Exception as e:
