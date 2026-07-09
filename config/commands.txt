@@ -31,27 +31,27 @@ ros: float64_array:/drive  values=0,0,0,0
 [look right]
 phrases: look right, look to the right, turn your head right
 say: looking right
-ros: joint_traj:/head_controller/joint_trajectory  head_pan_joint=-1.0 head_tilt_joint=0.0
+ros: joint_traj:/head_controller/joint_trajectory  head_yaw_joint=1.0 head_pitch=0.0 head_roll=0.0
 
 [look left]
 phrases: look left, look to the left, turn your head left
 say: looking left
-ros: joint_traj:/head_controller/joint_trajectory  head_pan_joint=1.0 head_tilt_joint=0.0
+ros: joint_traj:/head_controller/joint_trajectory  head_yaw_joint=-1.0 head_pitch=0.0 head_roll=0.0
 
 [look up]
 phrases: look up, tilt up, tilt your head up
 say: looking up
-ros: joint_traj:/head_controller/joint_trajectory  head_pan_joint=0.0 head_tilt_joint=0.5
+ros: joint_traj:/head_controller/joint_trajectory  head_yaw_joint=0.0 head_pitch=-0.5 head_roll=0.0
 
 [look down]
 phrases: look down, tilt down, tilt your head down
 say: looking down
-ros: joint_traj:/head_controller/joint_trajectory  head_pan_joint=0.0 head_tilt_joint=-0.5
+ros: joint_traj:/head_controller/joint_trajectory  head_yaw_joint=0.0 head_pitch=0.5 head_roll=0.0
 
 [look forward]
 phrases: look forward, look front, look straight, look ahead, look straight ahead
 say: looking forward
-ros: joint_traj:/head_controller/joint_trajectory  head_pan_joint=0.0 head_tilt_joint=0.0
+ros: joint_traj:/head_controller/joint_trajectory  head_yaw_joint=0.0 head_pitch=0.0 head_roll=0.0
 
 # ---------------------------------------------------------------------------
 # Docking
@@ -65,6 +65,13 @@ ros: srv_empty:/start_docking
 phrases: undock, leave the dock, undock yourself
 say: undocking
 ros: srv_empty:/undock
+
+# ---------------------------------------------------------------------------
+# Patrol
+# ---------------------------------------------------------------------------
+[patrol]
+phrases: do a patrol, start patrol
+say: okay
 
 # ---------------------------------------------------------------------------
 # Calibrate
