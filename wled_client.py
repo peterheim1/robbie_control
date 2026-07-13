@@ -15,6 +15,12 @@ Colors:
   status critical   → red     [255, 20, 0]   (voltage < 12.0V, solid)
   status problem     → red, blinking          (an active /diagnostics WARN/ERROR,
                                                 takes priority over the voltage color)
+
+Idle decoration (robbie_voice_server._status_wled_loop): every 10 minutes the
+status segment briefly flashes, alternating between a rainbow effect and a
+chase effect in a "larva" (glow-worm yellow-green) color scheme, then reverts
+to the normal voltage/fault display above. Purely cosmetic, unrelated to
+/diagnostics — a periodic idle decoration, not a fault indicator.
 """
 
 import asyncio
@@ -38,8 +44,15 @@ COLOR_RED     = [255, 20, 0]
 COLOR_TALK    = [255, 182, 193]
 COLOR_OFF     = [0, 0, 0]
 
+# "Larva" (glow-worm) scheme for the chase idle-flash: a pale yellow-green
+# fg crawling over a near-black bg.
+COLOR_LARVA_FG = [180, 255, 60]
+COLOR_LARVA_BG = [10, 25, 0]
+
 FX_SOLID = 0
 FX_BLINK = 1
+FX_RAINBOW = 9   # confirmed via /json/eff on the live device, 2026-07-11
+FX_CHASE   = 28  # confirmed via /json/eff on the live device, 2026-07-11
 
 # Outside-in chase: each entry is the pair of lit LED indices (relative to
 # the 8-LED mouth segment) for that animation frame — 0&7 first, closing in
@@ -131,6 +144,20 @@ class WLEDClient:
             await self._set_segment(SEG_STATUS, COLOR_AQUA)
         else:
             await self._set_segment(SEG_STATUS, COLOR_RED)
+
+    async def flash_rainbow(self):
+        """Idle decoration: rainbow-cycle the status segment briefly.
+        Caller (robbie_voice_server._status_wled_loop) is responsible for
+        reverting to set_status() afterward — this just sets the effect."""
+        await self._set_segment(SEG_STATUS, COLOR_OFF, fx=FX_RAINBOW, speed=180)
+
+    async def flash_chase_larva(self):
+        """Idle decoration: chase effect in the larva (glow-worm) color
+        scheme. Caller reverts to set_status() afterward."""
+        payload = {"on": True,
+                   "seg": [{"id": SEG_STATUS, "col": [COLOR_LARVA_FG, COLOR_LARVA_BG],
+                            "fx": FX_CHASE, "sx": 150}]}
+        await self._post(payload)
 
     # ------------------------------------------------------------------
     # Transport

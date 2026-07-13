@@ -10,14 +10,17 @@ from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
+import cv2
+import numpy as np
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String, Empty, Float64MultiArray, Float32, Bool
 from geometry_msgs.msg import Twist
-from sensor_msgs.msg import CompressedImage, JointState
+from sensor_msgs.msg import CompressedImage, Image, JointState
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 from builtin_interfaces.msg import Duration
 from diagnostic_msgs.msg import DiagnosticArray
+from vision_msgs.msg import Detection2DArray
 
 from robbie_control.intent_classifier import Intent
 
@@ -81,6 +84,7 @@ class ROS2Dispatcher:
             "stop": topics.get("stop", "/voice/stop"),
             "tts_text": topics.get("tts_text", "/voice/tts_text"),
             "speak": topics.get("speak", "/voice/speak"),
+            "ask_and_listen": topics.get("ask_and_listen", "/voice/ask_and_listen"),
             "cmd_vel": topics.get("cmd_vel", "/cmd_vel"),
             "drive": topics.get("drive", "/drive"),
             "head_position": topics.get("head_position", "/head/position"),
@@ -109,11 +113,35 @@ class ROS2Dispatcher:
         self._sub_speak = self._node.create_subscription(
             String, self._topic_names["speak"], self._on_speak_msg, 10)
 
-        # Camera — latest JPEG frame from OAK-D compressed topic (updated from spin thread)
+        # Subscriber: /voice/ask_and_listen — external nodes (e.g. Argus meet &
+        # greet) ask a question, then get the mic opened for a spoken reply.
+        self._ask_and_listen_callback = None   # async coroutine to call
+        self._ask_and_listen_loop: asyncio.AbstractEventLoop | None = None
+        self._sub_ask_and_listen = self._node.create_subscription(
+            String, self._topic_names["ask_and_listen"], self._on_ask_and_listen_msg, 10)
+
+        # Camera (top panel) — latest JPEG frame from the oculus/face-recognition
+        # camera, converted from raw bgr8 (updated from spin thread). Not
+        # compressed at the source, so re-encoded here via cv2.
         self._latest_camera_frame: bytes | None = None
         self._sub_camera = self._node.create_subscription(
-            CompressedImage, "/oak/rgb/image_raw/compressed",
+            Image, "/thor/camera/image_raw",
             self._on_camera_msg, 1)
+
+        # YOLO (lower panel) — annotated frame + detected-item list from
+        # oak_yolo_node.py (on-device YOLO via the DepthAI SDK on the OAK-D).
+        # 2026-07-08: switched from the RealSense-based yolo_depth_node.py
+        # path (/front_camera/yolo/..., Detection3DArray) to the OAK-D path
+        # (/oak/yolo/..., Detection2DArray) — no distance/z, 2-D only, see
+        # oak_yolo_node.py's module docstring for why.
+        self._latest_yolo_frame: bytes | None = None
+        self._latest_yolo_detections: list[dict] = []
+        self._sub_yolo_frame = self._node.create_subscription(
+            CompressedImage, "/oak/yolo/annotated/compressed",
+            self._on_yolo_frame_msg, 1)
+        self._sub_yolo_detections = self._node.create_subscription(
+            Detection2DArray, "/oak/yolo/detections_2d",
+            self._on_yolo_detections_msg, 1)
 
         # Cached state from subscribers
         self._battery_percentage: float | None = None
@@ -132,6 +160,11 @@ class ROS2Dispatcher:
             DiagnosticArray, "/diagnostics", self._on_diagnostics, 10)
         self._sub_joint_states = self._node.create_subscription(
             JointState, "/joint_states", self._on_joint_state, 10)
+
+        # Argus BT executor status (cmd/location/voltage/docked/boredom_enabled)
+        self._bt_status: dict = {}
+        self._sub_bt_status = self._node.create_subscription(
+            String, "/bt_status", self._on_bt_status, 10)
 
         # Torque enable publisher for thor_joint
         self._pub_torque = self._node.create_publisher(Bool, '/thor_joint/torque_enable', 10)
@@ -166,13 +199,54 @@ class ROS2Dispatcher:
         self._speak_callback = callback
         self._speak_loop = loop
 
-    def _on_camera_msg(self, msg: CompressedImage):
-        """Cache compressed JPEG frame (called from rclpy spin thread)."""
-        self._latest_camera_frame = bytes(msg.data)
+    def set_ask_and_listen_callback(self, callback, loop: asyncio.AbstractEventLoop):
+        """Register the async callback invoked when /voice/ask_and_listen is received.
+
+        Args:
+            callback: async coroutine function that accepts the question text.
+            loop:     the running asyncio event loop from the voice server.
+        """
+        self._ask_and_listen_callback = callback
+        self._ask_and_listen_loop = loop
+
+    def _on_camera_msg(self, msg: Image):
+        """Encode the raw bgr8 frame to JPEG and cache it (called from rclpy spin thread)."""
+        if msg.encoding != "bgr8":
+            logger.warning(f"/thor/camera/image_raw: unexpected encoding '{msg.encoding}', expected bgr8")
+            return
+        frame = np.frombuffer(msg.data, dtype=np.uint8).reshape(msg.height, msg.width, 3)
+        ok, jpeg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+        if ok:
+            self._latest_camera_frame = jpeg.tobytes()
 
     def get_latest_camera_frame(self) -> bytes | None:
         """Return the most recent camera frame as raw JPEG bytes, or None."""
         return self._latest_camera_frame
+
+    def _on_yolo_frame_msg(self, msg: CompressedImage):
+        """Cache the annotated YOLO JPEG frame (called from rclpy spin thread)."""
+        self._latest_yolo_frame = bytes(msg.data)
+
+    def get_latest_yolo_frame(self) -> bytes | None:
+        """Return the most recent YOLO-annotated camera frame as raw JPEG bytes, or None."""
+        return self._latest_yolo_frame
+
+    def _on_yolo_detections_msg(self, msg: Detection2DArray):
+        """Cache the latest detected items (called from rclpy spin thread)."""
+        items = []
+        for detection in msg.detections:
+            if not detection.results:
+                continue
+            hypothesis = detection.results[0].hypothesis
+            items.append({
+                "label": hypothesis.class_id,
+                "score": round(hypothesis.score, 2),
+            })
+        self._latest_yolo_detections = items
+
+    def get_latest_yolo_detections(self) -> list[dict]:
+        """Return the most recently detected items (label/score/distance), or []."""
+        return self._latest_yolo_detections
 
     def _on_speak_msg(self, msg: String):
         """Called from the rclpy spin thread when /voice/speak is published."""
@@ -182,6 +256,21 @@ class ROS2Dispatcher:
         asyncio.run_coroutine_threadsafe(
             self._speak_callback(text), self._speak_loop
         )
+
+    def _on_ask_and_listen_msg(self, msg: String):
+        """Called from the rclpy spin thread when /voice/ask_and_listen is published."""
+        question = msg.data.strip()
+        if not question or not self._ask_and_listen_callback or not self._ask_and_listen_loop:
+            return
+        asyncio.run_coroutine_threadsafe(
+            self._ask_and_listen_callback(question), self._ask_and_listen_loop
+        )
+
+    def publish_train_face(self, name: str):
+        """Publish a train_face intent to /voice/intent, cueing face enrollment."""
+        msg = String()
+        msg.data = json.dumps({"intent": "train_face", "params": {"name": name}})
+        self._pub_intent.publish(msg)
 
     def publish_intent(self, intent: Intent):
         """Publish a JSON-encoded intent to /voice/intent and action-specific topics."""
@@ -203,7 +292,7 @@ class ROS2Dispatcher:
             self._pub_tts_text.publish(tts_msg)
 
     def publish_stop(self):
-        """Fast-path emergency stop: publish to multiple topics simultaneously."""
+        """Fast-path emergency stop: zero the base now AND cancel any Argus mission."""
         # /voice/stop
         self._pub_stop.publish(Empty())
 
@@ -216,10 +305,19 @@ class ROS2Dispatcher:
         drive_msg.data = [0.0, 0.0, 0.0, 0.0]
         self._pub_drive.publish(drive_msg)
 
+        # The zeros above are momentary — during a mission Nav2's controller
+        # keeps publishing cmd_vel, so the mission itself must be cancelled.
+        # bt_executor handles the stop_all intent imperatively (haltTree +
+        # Nav2 goal cancel, 2026-07-13); without this, voice fast-stop and
+        # /api/stop_all only paused the robot for one control cycle.
+        msg = String()
+        msg.data = json.dumps({"intent": "stop_all", "params": {}})
+        self._pub_intent.publish(msg)
+
     def publish_head(self, pan: float, tilt: float):
         """Publish head position to /head_controller/joint_trajectory."""
         msg = JointTrajectory()
-        msg.joint_names = ["head_pan_joint", "head_tilt_joint"]
+        msg.joint_names = ["head_yaw_joint", "head_pitch"]
         pt = JointTrajectoryPoint()
         pt.positions = [pan, tilt]
         pt.time_from_start = Duration(sec=0, nanosec=500_000_000)  # 0.5 s
@@ -393,6 +491,33 @@ class ROS2Dispatcher:
     def get_dock_state(self) -> bool | None:
         """Return cached dock state, or None if unknown."""
         return self._is_docked
+
+    def _on_bt_status(self, msg: String):
+        """Cache the latest /bt_status JSON (called from rclpy spin thread)."""
+        try:
+            self._bt_status = json.loads(msg.data)
+        except (json.JSONDecodeError, TypeError):
+            logger.warning(f"/bt_status: malformed JSON: {msg.data!r}")
+
+    def get_boredom_enabled(self) -> bool | None:
+        """Return cached boredom-system enabled state, or None if unknown (no /bt_status yet)."""
+        return self._bt_status.get("boredom_enabled")
+
+    def set_boredom_enabled(self, enabled: bool) -> bool:
+        """Enable/disable the BT boredom-fidget system (blocking). Returns True on success."""
+        from std_srvs.srv import SetBool
+        client = self._get_service_client(SetBool, "/boredom_system/enable")
+        if not client.wait_for_service(timeout_sec=3.0):
+            logger.warning("Service /boredom_system/enable not available")
+            return False
+        req = SetBool.Request()
+        req.data = enabled
+        try:
+            resp = client.call(req)
+            return bool(resp.success)
+        except Exception as e:
+            logger.error(f"set_boredom_enabled failed: {e}")
+            return False
 
     def get_published_topics(self) -> list[str]:
         """Return list of topic names this dispatcher publishes to."""

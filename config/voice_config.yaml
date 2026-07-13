@@ -61,6 +61,11 @@ wled:
   # seg 1 (mouth, 8px):  outside-in pink chase while speaking
   # seg 2 (status, 27px): blue = normal/charging, aqua = 12.0-12.8V,
   #                        red = <12V, blinking red = active fault
+  # Idle decoration on seg 2: every status_flash_interval_s, alternates a
+  # rainbow / chase-larva flash for status_flash_duration_s, then reverts.
+  # Purely cosmetic, unrelated to the fault blink above.
+  status_flash_interval_s: 600
+  status_flash_duration_s: 4
 
 ros2:
   node_name: "robbie_voice"

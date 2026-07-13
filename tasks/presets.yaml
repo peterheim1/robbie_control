@@ -15,8 +15,8 @@ Pose 5:
 default_pose:
   ear_left_joint: 0.0
   ear_right_joint: 0.0
-  head_pan_joint: 0.0
-  head_tilt_joint: 0.0
+  head_yaw_joint: 0.0
+  head_pitch: 0.0
   left_gripper: 0.0
   left_joint_1: 1.57
   left_joint_2: 0.25
@@ -34,8 +34,8 @@ default_pose:
 driving:
   ear_left_joint: -0.49
   ear_right_joint: -0.47
-  head_pan_joint: 0.02
-  head_tilt_joint: 0.02
+  head_yaw_joint: 0.02
+  head_pitch: 0.02
   left_joint_1: 1.44
   left_joint_2: 0.0
   left_joint_3: 0.37
@@ -51,8 +51,8 @@ driving:
 netural:
   ear_left_joint: 0.0
   ear_right_joint: 0.0
-  head_pan_joint: 0.0
-  head_tilt_joint: 0.0
+  head_yaw_joint: 0.0
+  head_pitch: 0.0
   left_joint_1: 1.44
   left_joint_2: 0.0
   left_joint_3: 0.0

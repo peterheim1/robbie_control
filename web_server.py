@@ -35,18 +35,23 @@ _HTML = """<!DOCTYPE html>
   <title>Robbie</title>
   <style>
     *{box-sizing:border-box;margin:0;padding:0}
-    body{background:#0d1117;color:#e6edf3;font-family:'Courier New',monospace;font-size:14px}
+    /* Whole app is a 100vh flex column: header/tabs/infobar fixed, the active
+       tab fills the rest. The PAGE never scrolls — long content (live log,
+       sidebar, docs, diagnostics) scrolls inside its own panel instead. */
+    html,body{height:100%}
+    body{background:#0d1117;color:#e6edf3;font-family:'Courier New',monospace;font-size:14px;
+         display:flex;flex-direction:column;overflow:hidden}
     header{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;
-           padding:12px 16px;background:#161b22;border-bottom:1px solid #30363d}
-    .page-wrap{display:flex;gap:0;align-items:flex-start}
+           padding:12px 16px;background:#161b22;border-bottom:1px solid #30363d;flex-shrink:0}
+    .page-wrap{display:flex;gap:0;align-items:stretch;flex:1;min-height:0}
     .right-sidebar{width:300px;flex-shrink:0;display:flex;flex-direction:column;
-                   border-left:1px solid #30363d;min-height:calc(100vh - 90px)}
-    .cam-panel{border-bottom:1px solid #30363d}
-    .cam-panel .panel-hdr{padding:6px 12px;font-size:11px;color:#8b949e;text-transform:uppercase;
-                          letter-spacing:1px;background:#161b22;border-bottom:1px solid #30363d}
+                   border-left:1px solid #30363d;min-height:0;overflow-y:auto}
     .cam-feed{width:100%;display:block;background:#000;min-height:169px;object-fit:contain}
     .cam-none{display:flex;align-items:center;justify-content:center;height:169px;
               color:#6e7681;font-size:12px;background:#0d1117}
+    .yolo-items{padding:4px 12px 8px;font-size:11px;color:#8b949e;line-height:1.5;min-height:16px}
+    .yolo-items .item{color:#c9d1d9}
+    .yolo-items .item .score{color:#6e7681}
     .tasks-panel{background:#161b22;padding:4px 0}
     .tasks-panel .panel-hdr{padding:4px 12px;font-size:11px;color:#8b949e;text-transform:uppercase;
                             letter-spacing:1px;border-bottom:1px solid #30363d;margin-bottom:4px}
@@ -96,7 +101,28 @@ _HTML = """<!DOCTYPE html>
                    background:#8b949e;border-radius:50%;transition:.3s}
     input:checked+.slider{background:#f85149}
     input:checked+.slider:before{transform:translateX(20px);background:#fff}
-    .main-col{flex:1;min-width:0;padding:16px;display:flex;flex-direction:column;gap:14px}
+    .main-col{flex:1;min-width:0;min-height:0;padding:16px;display:flex;flex-direction:column;
+              gap:14px;overflow:hidden}
+    /* Top row: Command + Last Interaction stacked in a ~1/3-width column,
+       the two camera feeds side by side in the remaining width. The live
+       log below takes ALL remaining height and scrolls internally. */
+    .top-row{display:flex;gap:14px;flex-wrap:wrap;flex-shrink:0}
+    .cmd-li-stack{flex:0 1 33%;min-width:280px;max-width:33vw;
+                  display:flex;flex-direction:column;gap:14px}
+    .cams-card{flex:1 1 380px;min-width:0;display:flex;flex-direction:column}
+    .cams-row{display:grid;grid-template-columns:1fr 1fr;gap:10px;padding:10px}
+    .cam-cell{background:#0d1117;border:1px solid #21262d;border-radius:6px;
+              overflow:hidden;display:flex;flex-direction:column}
+    .cam-cell-hdr{padding:4px 10px;font-size:11px;color:#8b949e;text-transform:uppercase;
+                  letter-spacing:1px;background:#161b22;border-bottom:1px solid #21262d}
+    /* Fixed cell geometry: feed and its "No signal" placeholder are the same
+       height, and the YOLO items strip is a fixed-height scroller — so the
+       cells never resize as frames arrive or the detection list changes. */
+    .cams-row .cam-feed{height:210px;max-height:none}
+    .cams-row .cam-none{height:210px}
+    .cams-row .yolo-items{height:52px;overflow-y:auto}
+    .log-card{flex:1;min-height:0;display:flex;flex-direction:column}
+    .log-card .card-hdr{flex-shrink:0}
     .banner{color:#f85149;text-align:center;padding:6px;font-size:12px;display:none}
     .card{background:#161b22;border:1px solid #30363d;border-radius:8px;overflow:hidden}
     .card-hdr{padding:6px 12px;background:#21262d;font-size:11px;color:#8b949e;
@@ -116,7 +142,7 @@ _HTML = """<!DOCTYPE html>
     .badge{font-size:11px;margin-left:6px}
     .badge.muted{color:#f85149}
     .badge.web{color:#58a6ff}
-    .log-box{font-family:'Courier New',monospace;font-size:12px;height:300px;overflow-y:auto;
+    .log-box{font-family:'Courier New',monospace;font-size:12px;flex:1;min-height:0;overflow-y:auto;
              background:#0d1117;padding:8px;line-height:1.7}
     .ll{white-space:pre-wrap;word-break:break-all}
     .ll.err{color:#f85149} .ll.warn{color:#e3b341} .ll.info{color:#6e7681}
@@ -124,18 +150,21 @@ _HTML = """<!DOCTYPE html>
     .ll.tts{color:#bc8cff} .ll.tts-muted{color:#6e4496}
     .infobar{display:flex;align-items:center;gap:16px;flex-wrap:wrap;
              padding:5px 16px;background:#0d1117;border-bottom:1px solid #21262d;
-             font-size:12px;color:#8b949e}
+             font-size:12px;color:#8b949e;flex-shrink:0}
     .sep{color:#30363d}
     /* ── Tabs ── */
-    .tab-bar{display:flex;background:#161b22;border-bottom:1px solid #30363d;padding:0 16px}
+    .tab-bar{display:flex;background:#161b22;border-bottom:1px solid #30363d;padding:0 16px;
+             flex-shrink:0}
     .tab-btn{background:none;border:none;color:#8b949e;font-family:inherit;font-size:13px;
              padding:10px 16px;cursor:pointer;border-bottom:2px solid transparent;transition:.15s}
     .tab-btn:hover{color:#e6edf3}
     .tab-btn.active{color:#58a6ff;border-bottom-color:#58a6ff}
     .tab-pane{display:none}
-    .tab-pane.active{display:block}
+    /* Active tab is a flex column filling the viewport remainder — child
+       layouts use flex:1 (not 100vh calc) so they always fit exactly. */
+    .tab-pane.active{display:flex;flex-direction:column;flex:1;min-height:0;overflow:hidden}
     /* ── Docs tab ── */
-    .docs-layout{display:flex;height:calc(100vh - 112px)}
+    .docs-layout{display:flex;flex:1;min-height:0}
     .docs-sidebar{width:220px;flex-shrink:0;border-right:1px solid #30363d;
                   background:#161b22;overflow-y:auto;padding:8px 0}
     .docs-sidebar-hdr{padding:6px 12px;font-size:11px;color:#8b949e;
@@ -203,7 +232,7 @@ _HTML = """<!DOCTYPE html>
     #batteryInfo.low{color:#e3b341}
     #batteryInfo.critical{color:#f85149}
     /* ── Logs tab ── */
-    .logs-layout{display:flex;flex-direction:column;height:calc(100vh - 112px);padding:16px;gap:12px}
+    .logs-layout{display:flex;flex-direction:column;flex:1;min-height:0;padding:16px;gap:12px}
     .logs-toolbar{display:flex;align-items:center;gap:12px;flex-shrink:0}
     .logs-status{font-size:12px;color:#8b949e}
     .logs-report{background:#161b22;border:1px solid #30363d;border-radius:8px;
@@ -261,27 +290,34 @@ _HTML = """<!DOCTYPE html>
       border-radius:6px;padding:7px 16px;font-family:inherit;font-size:13px;cursor:pointer}
     .task-ed-cancel:hover{border-color:#8b949e;color:#c9d1d9}
     /* ── Diagnostics tab ── */
-    .diag-layout{display:flex;flex-direction:column;height:calc(100vh - 112px);padding:16px;gap:12px}
+    .diag-layout{display:flex;flex-direction:column;flex:1;min-height:0;padding:16px;gap:12px}
     .diag-toolbar{display:flex;align-items:center;gap:12px;flex-shrink:0}
     .diag-updated{font-size:12px;color:#6e7681}
-    .diag-table{background:#161b22;border:1px solid #30363d;border-radius:8px;
-                overflow:hidden;flex:1;overflow-y:auto}
-    .diag-row{display:grid;grid-template-columns:90px 160px 1fr;gap:0;
-              border-bottom:1px solid #21262d;padding:7px 12px;align-items:center}
-    .diag-row:last-child{border-bottom:none}
+    /* Two-column card grid; inside each card the badge sits left and the
+       name + message stack in the right cell (long names wrap instead of
+       overlapping the status/message). Falls back to one column on narrow
+       windows. */
+    .diag-table{flex:1;min-height:0;overflow-y:auto;display:grid;
+                grid-template-columns:1fr 1fr;gap:8px;align-content:start;padding:2px}
+    @media(max-width:1000px){.diag-table{grid-template-columns:1fr}}
+    .diag-row{display:grid;grid-template-columns:70px minmax(0,1fr);gap:2px 10px;
+              align-items:start;padding:8px 10px;background:#161b22;
+              border:1px solid #30363d;border-radius:8px}
     .diag-badge{display:inline-block;font-size:11px;font-weight:bold;padding:2px 7px;
                 border-radius:10px;text-align:center;letter-spacing:.5px}
     .diag-ok  .diag-badge{background:#0d2a13;color:#3fb950;border:1px solid #3fb950}
     .diag-warn .diag-badge{background:#2d2000;color:#e3b341;border:1px solid #e3b341}
     .diag-err  .diag-badge{background:#3d1f1f;color:#f85149;border:1px solid #f85149}
     .diag-stale .diag-badge{background:#1c2128;color:#6e7681;border:1px solid #444c56}
-    .diag-name{font-size:13px;color:#c9d1d9;padding:0 12px}
-    .diag-msg{font-size:12px;color:#8b949e;word-break:break-word;line-height:1.4}
+    .diag-name{font-size:12px;color:#c9d1d9;word-break:break-word;line-height:1.35;
+               padding-top:2px}
+    .diag-msg{grid-column:2;font-size:12px;color:#8b949e;word-break:break-word;line-height:1.4}
     .diag-err  .diag-msg{color:#e07070}
     .diag-warn .diag-msg{color:#c9a227}
-    .diag-empty{padding:20px;text-align:center;color:#6e7681;font-size:13px}
+    .diag-empty{grid-column:1/-1;padding:20px;text-align:center;color:#6e7681;font-size:13px;
+                background:#161b22;border:1px solid #30363d;border-radius:8px}
     /* ── Joints tab ── */
-    .joints-layout{display:flex;flex-direction:column;height:calc(100vh - 112px);padding:16px;gap:12px}
+    .joints-layout{display:flex;flex-direction:column;flex:1;min-height:0;padding:16px;gap:12px}
     .joints-toolbar{display:flex;align-items:center;gap:16px;flex-shrink:0;flex-wrap:wrap}
     .joints-groups{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;overflow-y:auto;flex:1;align-content:start}
     .joints-group{background:#161b22;border:1px solid #30363d;border-radius:8px;overflow:hidden}
@@ -523,11 +559,18 @@ _HTML = """<!DOCTYPE html>
     <button class="danger-btn" onclick="stopAll()"
             data-tip="Stop all motion immediately&#10;Zeros cmd_vel, drive motors&#10;and voice pipeline">&#x23F9; Stop All</button>
     <button class="shutdown-btn" onclick="shutdownPc()"
-            data-tip="Shut down the Raspberry Pi&#10;(requires confirmation)">&#x23FB; Shutdown</button>
+            data-tip="Shut down this Raspberry Pi and the oculus camera Pi&#10;(requires confirmation)">&#x23FB; Shutdown</button>
     <label class="mute-wrap" title="Silent mode — text shown, robot stays quiet">
       <span class="mute-label">&#x1F507; Silent</span>
       <div class="toggle">
         <input type="checkbox" id="muteToggle" onchange="toggleMute()">
+        <span class="slider"></span>
+      </div>
+    </label>
+    <label class="mute-wrap" title="Idle fidgets — shoulder twitch, ear wiggle, head scan">
+      <span class="mute-label">&#x1F98F; Fidgets</span>
+      <div class="toggle">
+        <input type="checkbox" id="boredomToggle" checked onchange="toggleBoredom()">
         <span class="slider"></span>
       </div>
     </label>
@@ -550,44 +593,60 @@ _HTML = """<!DOCTYPE html>
 <div class="main-col">
   <div id="banner" class="banner">&#x26A0; Disconnected — reconnecting...</div>
 
-  <div class="card">
-    <div class="card-hdr">Command</div>
-    <div class="card-body">
-      <div class="cmd-row">
-        <input id="cmdInput" class="cmd-input" type="text"
-               placeholder="type a command and press Enter..."
-               onkeydown="if(event.key==='Enter')sendCmd()">
-        <button class="send-btn" onclick="sendCmd()">Send</button>
+  <div class="top-row">
+    <div class="cmd-li-stack">
+      <div class="card">
+        <div class="card-hdr">Command</div>
+        <div class="card-body">
+          <div class="cmd-row">
+            <input id="cmdInput" class="cmd-input" type="text"
+                   placeholder="type a command..."
+                   onkeydown="if(event.key==='Enter')sendCmd()">
+            <button class="send-btn" onclick="sendCmd()">Send</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-hdr">Last Interaction</div>
+        <div class="card-body">
+          <div class="grid">
+            <span class="lbl" data-tip="What Robbie heard&#10;(STT transcript or web injection)">Heard</span>
+            <span id="lHeard" class="val">&mdash;</span>
+            <span class="lbl" data-tip="Classified intent + parameters&#10;Determined by the intent classifier">Intent</span>
+            <span id="lIntent" class="val">&mdash;</span>
+            <span class="lbl" data-tip="Text sent to TTS&#10;🔇 badge = muted, not spoken">Response</span>
+            <span id="lResponse" class="val">&mdash;</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card cams-card">
+      <div class="card-hdr">Cameras</div>
+      <div class="cams-row">
+        <div class="cam-cell">
+          <div class="cam-cell-hdr">&#x1F4F7; Camera</div>
+          <img id="camFeed" class="cam-feed" alt="" style="display:none">
+          <div id="camNone" class="cam-none">No signal</div>
+        </div>
+        <div class="cam-cell">
+          <div class="cam-cell-hdr">&#x1F441; YOLO</div>
+          <img id="yoloFeed" class="cam-feed" alt="" style="display:none">
+          <div id="yoloNone" class="cam-none">No signal</div>
+          <div id="yoloItems" class="yolo-items">No items detected</div>
+        </div>
       </div>
     </div>
   </div>
 
-  <div class="card">
-    <div class="card-hdr">Last Interaction</div>
-    <div class="card-body">
-      <div class="grid">
-        <span class="lbl" data-tip="What Robbie heard&#10;(STT transcript or web injection)">Heard</span>
-        <span id="lHeard" class="val">&mdash;</span>
-        <span class="lbl" data-tip="Classified intent + parameters&#10;Determined by the intent classifier">Intent</span>
-        <span id="lIntent" class="val">&mdash;</span>
-        <span class="lbl" data-tip="Text sent to TTS&#10;🔇 badge = muted, not spoken">Response</span>
-        <span id="lResponse" class="val">&mdash;</span>
-      </div>
-    </div>
-  </div>
-
-  <div class="card">
+  <div class="card log-card">
     <div class="card-hdr">Live Log</div>
     <div id="log" class="log-box"></div>
   </div>
 </div>
 
 <div class="right-sidebar">
-  <div class="cam-panel">
-    <div class="panel-hdr">&#x1F4F7; Camera</div>
-    <img id="camFeed" class="cam-feed" alt="" style="display:none">
-    <div id="camNone" class="cam-none">No signal</div>
-  </div>
   <div class="tasks-panel" id="tasksPanel">
     <div class="panel-hdr">&#x25B6; Tasks</div>
     <div id="taskList"><!-- populated by /api/tasks --></div>
@@ -612,7 +671,6 @@ _HTML = """<!DOCTYPE html>
       <div class="head-tilt-ctr"><span id="headTiltVal">0.00</span> rad</div>
     </div>
   </div>
-</div>
 </div>
 </div>
 </div>
@@ -953,7 +1011,7 @@ _HTML = """<!DOCTYPE html>
   }
 
   function shutdownPc() {
-    if (!confirm('Shutdown the Raspberry Pi now?')) return;
+    if (!confirm('Shutdown this Raspberry Pi and the oculus camera Pi now?')) return;
     fetch('/api/shutdown', {method: 'POST'});
     addLog('Shutdown command sent', 'warn');
   }
@@ -963,6 +1021,25 @@ _HTML = """<!DOCTYPE html>
     if (ws && ws.readyState === 1)
       ws.send(JSON.stringify({type: 'set_tts_mute', muted}));
   }
+
+  function toggleBoredom() {
+    const enabled = document.getElementById('boredomToggle').checked;
+    fetch('/api/boredom/enable', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({enabled}),
+    }).then(r => r.json()).then(d => {
+      if (d.status !== 'ok') {
+        addLog('Boredom fidget toggle failed: ' + (d.message || 'unknown error'), 'warn');
+        document.getElementById('boredomToggle').checked = !enabled;  // revert on failure
+      }
+    });
+  }
+
+  fetch('/api/boredom/enable').then(r => r.json()).then(d => {
+    if (d.enabled !== null && d.enabled !== undefined)
+      document.getElementById('boredomToggle').checked = d.enabled;
+  });
 
   function esc(s) {
     return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
@@ -1139,6 +1216,58 @@ _HTML = """<!DOCTYPE html>
         })
         .finally(() => { pending = false; });
     }, 100);  // 10 fps poll
+  })();
+
+  // ---- YOLO feed (snapshot polling) + detected items ----
+  (function startYoloPoll() {
+    const img  = document.getElementById('yoloFeed');
+    const none = document.getElementById('yoloNone');
+    let pending = false;
+    setInterval(() => {
+      if (pending) return;
+      pending = true;
+      const url = '/camera/yolo_snapshot?' + Date.now();
+      fetch(url)
+        .then(r => {
+          if (r.status === 204) throw new Error('no frame');
+          return r.blob();
+        })
+        .then(blob => {
+          const old = img.src;
+          img.src = URL.createObjectURL(blob);
+          if (old && old.startsWith('blob:')) URL.revokeObjectURL(old);
+          img.style.display = 'block';
+          none.style.display = 'none';
+        })
+        .catch(() => {
+          img.style.display = 'none';
+          none.style.display = 'flex';
+        })
+        .finally(() => { pending = false; });
+    }, 200);  // 5 fps poll — yolo_depth_node runs well under camera rate anyway
+
+    const itemsEl = document.getElementById('yoloItems');
+    setInterval(() => {
+      fetch('/api/yolo_detections')
+        .then(r => r.json())
+        .then(({items}) => {
+          if (!items || !items.length) {
+            itemsEl.textContent = 'No items detected';
+            return;
+          }
+          itemsEl.replaceChildren(...items.flatMap((it, i) => {
+            const label = document.createElement('span');
+            label.className = 'item';
+            label.textContent = it.label;
+            const score = document.createElement('span');
+            score.className = 'score';
+            score.textContent = ` ${it.score}`;
+            const nodes = i > 0 ? [document.createElement('br'), label, score] : [label, score];
+            return nodes;
+          }));
+        })
+        .catch(() => {});
+    }, 500);
   })();
 
   // ---- Tab switching ----
@@ -2389,6 +2518,28 @@ class WebServer:
                 headers={"Cache-Control": "no-store"},
             )
 
+        @app.get("/camera/yolo_snapshot")
+        async def camera_yolo_snapshot():
+            """Return the latest YOLO-annotated frame as a single JPEG (polled by JS)."""
+            from fastapi.responses import Response
+            dispatcher = (self._voice_server and
+                          getattr(self._voice_server, '_dispatcher', None))
+            frame = dispatcher.get_latest_yolo_frame() if dispatcher else None
+            if not frame:
+                return Response(status_code=204)  # No Content — JS treats as no signal
+            return Response(
+                content=frame,
+                media_type="image/jpeg",
+                headers={"Cache-Control": "no-store"},
+            )
+
+        @app.get("/api/yolo_detections")
+        async def api_yolo_detections():
+            dispatcher = (self._voice_server and
+                          getattr(self._voice_server, '_dispatcher', None))
+            items = dispatcher.get_latest_yolo_detections() if dispatcher else []
+            return {"items": items}
+
         @app.get("/api/tasks")
         async def api_tasks():
             tasks = []
@@ -2540,7 +2691,12 @@ class WebServer:
             async def generate():
                 yield f"data: {json.dumps({'status': 'Reading logs…'})}\n\n"
 
-                log_text = await asyncio.to_thread(self._collect_ros_logs)
+                try:
+                    log_text = await asyncio.to_thread(self._collect_ros_logs)
+                except Exception as e:
+                    yield f"data: {json.dumps({'token': f'Log collection failed: {e}'})}\n\n"
+                    yield "data: [DONE]\n\n"
+                    return
                 if not log_text.strip():
                     yield f"data: {json.dumps({'token': 'No ROS2 log files found.'})}\n\n"
                     yield "data: [DONE]\n\n"
@@ -2549,7 +2705,6 @@ class WebServer:
                 yield f"data: {json.dumps({'status': 'Analysing with LLM…'})}\n\n"
 
                 system_prompt = (
-                    "/no_think "
                     "You are a robot systems diagnostics analyst. "
                     "Analyse the provided ROS2 log output and produce a concise report. "
                     "Use markdown with these sections: "
@@ -2562,11 +2717,22 @@ class WebServer:
                     {"role": "user", "content": f"ROS2 logs:\n\n{log_text}"},
                 ]
 
+                # Model/host come from voice_config.yaml's llm block (one source
+                # of truth). The old hardcoded qwen3:4b stopped producing reports
+                # entirely: it's a thinking model, current Ollama ignores the
+                # legacy "/no_think" soft switch, and the whole num_predict
+                # budget went to hidden thinking — zero content tokens streamed.
+                llm_cfg = {}
+                if self._voice_server is not None:
+                    llm_cfg = self._voice_server.config.get("llm", {})
+                llm_host = llm_cfg.get("host", "http://10.0.0.87:11434")
+                llm_model = llm_cfg.get("model", "mistral")
+
                 try:
                     import ollama
-                    client = ollama.AsyncClient(host="http://10.0.0.87:11434")
+                    client = ollama.AsyncClient(host=llm_host)
                     async for chunk in await client.chat(
-                        model="qwen3:4b",
+                        model=llm_model,
                         messages=messages,
                         stream=True,
                         options={"num_predict": 1024},
@@ -2606,11 +2772,40 @@ class WebServer:
 
         @app.post("/api/shutdown")
         async def api_shutdown():
-            """Shutdown the Raspberry Pi."""
+            """Shutdown the Raspberry Pi and the oculus camera Pi."""
+            try:
+                await asyncio.to_thread(
+                    subprocess.run,
+                    ["ssh", "-o", "ConnectTimeout=3", "pi@oculus", "sudo poweroff"],
+                    timeout=10,
+                )
+            except Exception:
+                logger.exception("Failed to power off oculus")
             asyncio.create_task(asyncio.to_thread(
                 subprocess.run, ["sudo", "shutdown", "-h", "now"]
             ))
             return {"status": "shutting down"}
+
+        @app.get("/api/boredom/enable")
+        async def api_boredom_get():
+            """Return the BT boredom-fidget system's current enabled state."""
+            dispatcher = (self._voice_server and
+                          getattr(self._voice_server, '_dispatcher', None))
+            enabled = dispatcher.get_boredom_enabled() if dispatcher else None
+            return {"enabled": enabled}
+
+        @app.post("/api/boredom/enable")
+        async def api_boredom_set(body: dict[str, Any]):
+            """Enable/disable the BT boredom-fidget system (shoulder twitch/ear wiggle/head scan)."""
+            dispatcher = (self._voice_server and
+                          getattr(self._voice_server, '_dispatcher', None))
+            if not dispatcher:
+                return {"status": "error", "message": "dispatcher not available"}
+            enabled = bool(body.get("enabled", True))
+            ok = await asyncio.to_thread(dispatcher.set_boredom_enabled, enabled)
+            if ok:
+                return {"status": "ok", "enabled": enabled}
+            return {"status": "error", "message": "service call failed or timed out"}
 
         @app.post("/api/slam/save_map")
         async def api_slam_save_map():

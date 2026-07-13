@@ -280,7 +280,9 @@ class RobbieVoiceServer:
             await self._wled.set_mouth_off()
             await self._update_status_wled()
             self.console.log_info(f"WLED connected at {wled_cfg.get('host', '10.0.0.85')} (eyes=green)")
-            asyncio.get_event_loop().create_task(self._status_wled_loop())
+            asyncio.get_event_loop().create_task(self._status_wled_loop(
+                flash_interval_s=wled_cfg.get("status_flash_interval_s", 600),
+                flash_duration_s=wled_cfg.get("status_flash_duration_s", 4)))
 
         self.console.log_info("Robbie Voice Server ready")
         self.console.log_end()
@@ -310,11 +312,32 @@ class RobbieVoiceServer:
         has_problem = bool(self._dispatcher.get_system_errors()) if self._dispatcher else False
         await self._wled.set_status(voltage, bool(charging), has_problem)
 
-    async def _status_wled_loop(self):
-        """Periodically refresh the status segment — independent of eyes/listening state."""
+    async def _status_wled_loop(self, flash_interval_s: float = 600, flash_duration_s: float = 4):
+        """Periodically refresh the status segment — independent of eyes/listening state.
+
+        Every flash_interval_s (config: wled.status_flash_interval_s, default
+        10 min), briefly flashes the status segment with an idle decoration,
+        alternating each time between a rainbow effect and a chase effect in
+        a "larva" color scheme, then reverts to the normal voltage/fault
+        display. Purely cosmetic — unrelated to /diagnostics faults, which
+        keep using the existing red blink in _update_status_wled() untouched.
+        """
+        elapsed = 0.0
+        flash_rainbow_next = True
         while True:
             await self._update_status_wled()
             await asyncio.sleep(10)
+            elapsed += 10
+            if elapsed >= flash_interval_s:
+                elapsed = 0.0
+                if self._wled:
+                    if flash_rainbow_next:
+                        await self._wled.flash_rainbow()
+                    else:
+                        await self._wled.flash_chase_larva()
+                    flash_rainbow_next = not flash_rainbow_next
+                    await asyncio.sleep(flash_duration_s)
+                    await self._update_status_wled()
 
     def _on_wake_word(self):
         """Called when wake word is detected."""
@@ -644,6 +667,10 @@ class RobbieVoiceServer:
         muted = self._web is not None and self._web.tts_muted
         await self.publish_event({"type": "tts", "text": text, "muted": muted})
         if muted:
+            # Still ack speak_done: Argus's SpeakAction blocks on this, so
+            # skipping it made every muted Speak stall its full 6s timeout.
+            if self._dispatcher:
+                self._dispatcher.publish_speak_done(text)
             return
         async with self._tts_lock:
             try:

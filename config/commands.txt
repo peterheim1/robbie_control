@@ -17,7 +17,12 @@
 # ---------------------------------------------------------------------------
 # Stop
 # ---------------------------------------------------------------------------
-[stop]
+# Name must stay "stop_all": the command name is published as the intent
+# name on /voice/intent, and bt_executor's intent_cb only handles "stop_all"
+# (imperative haltTree + Nav2 goal cancel, 2026-07-13). The ros: zeros below
+# are a one-shot reflex only — Nav2 keeps publishing cmd_vel during a
+# mission, so the BT cancel is what actually stops the robot.
+[stop_all]
 phrases: stop, halt, freeze, stop everything, emergency stop
 say: stopping
 flags: cancel_tasks
@@ -26,32 +31,30 @@ ros: twist:/cmd_vel
 ros: float64_array:/drive  values=0,0,0,0
 
 # ---------------------------------------------------------------------------
-# Head / look directions
+# Head / look directions — routed through Argus (bt_executor's intent_cb),
+# not a direct ros: dispatch. This makes "look" a real current_cmd like
+# goto/patrol/dock: it participates in busy-gating (suspends idle fidgets
+# while it runs) instead of bypassing the tree entirely.
 # ---------------------------------------------------------------------------
-[look right]
+[look_right]
 phrases: look right, look to the right, turn your head right
 say: looking right
-ros: joint_traj:/head_controller/joint_trajectory  head_yaw_joint=1.0 head_pitch=0.0 head_roll=0.0
 
-[look left]
+[look_left]
 phrases: look left, look to the left, turn your head left
 say: looking left
-ros: joint_traj:/head_controller/joint_trajectory  head_yaw_joint=-1.0 head_pitch=0.0 head_roll=0.0
 
-[look up]
+[look_up]
 phrases: look up, tilt up, tilt your head up
 say: looking up
-ros: joint_traj:/head_controller/joint_trajectory  head_yaw_joint=0.0 head_pitch=-0.5 head_roll=0.0
 
-[look down]
+[look_down]
 phrases: look down, tilt down, tilt your head down
 say: looking down
-ros: joint_traj:/head_controller/joint_trajectory  head_yaw_joint=0.0 head_pitch=0.5 head_roll=0.0
 
-[look forward]
+[look_forward]
 phrases: look forward, look front, look straight, look ahead, look straight ahead
 say: looking forward
-ros: joint_traj:/head_controller/joint_trajectory  head_yaw_joint=0.0 head_pitch=0.0 head_roll=0.0
 
 # ---------------------------------------------------------------------------
 # Docking

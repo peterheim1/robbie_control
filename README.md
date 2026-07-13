@@ -139,7 +139,7 @@ ros: float64_array:/drive  values=0,0,0,0
 [look right]
 phrases: look right, turn your head right
 say: looking right
-ros: joint_traj:/head_controller/joint_trajectory  head_pan_joint=-1.2 head_tilt_joint=0.0
+ros: joint_traj:/head_controller/joint_trajectory  head_yaw_joint=-1.2 head_pitch=0.0
 ```
 
 **ROS action types in commands.txt:**

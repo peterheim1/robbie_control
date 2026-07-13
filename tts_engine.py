@@ -2,28 +2,22 @@
 
 import io
 import os
-import sys
 import wave
-import subprocess
-import shutil
+
+from piper.voice import PiperVoice
 
 
 class TTSEngine:
-    """Wraps Piper TTS to synthesize text to PCM audio."""
+    """Wraps Piper TTS to synthesize text to PCM audio.
+
+    Loads the ONNX voice model once at construction and keeps it resident,
+    since a fresh piper subprocess per utterance cost ~4s of model-load
+    overhead on every call.
+    """
 
     def __init__(self, model: str = "en_US-lessac-medium",
                  output_sample_rate: int = 22050):
         self.output_sample_rate = output_sample_rate
-        # Check venv bin dir first, then PATH
-        venv_bin = os.path.join(os.path.dirname(sys.executable), "piper")
-        if os.path.isfile(venv_bin) and os.access(venv_bin, os.X_OK):
-            self._piper_path = venv_bin
-        else:
-            self._piper_path = shutil.which("piper")
-        if not self._piper_path:
-            raise RuntimeError(
-                "piper not found in PATH. Install with: pip install piper-tts"
-            )
         # Resolve model: if it's a path to an .onnx file, use it directly;
         # otherwise look in the models/piper directory next to this file.
         if os.path.isfile(model):
@@ -35,6 +29,8 @@ class TTSEngine:
                 self.model = onnx_path
             else:
                 self.model = model  # let piper try to resolve it
+
+        self._voice = PiperVoice.load(self.model)
 
     def synthesize(self, text: str) -> bytes:
         """Synthesize text to raw 16-bit PCM audio bytes.
@@ -48,21 +44,9 @@ class TTSEngine:
         if not text:
             return b""
 
-        result = subprocess.run(
-            [
-                self._piper_path,
-                "--model", self.model,
-                "--output-raw",
-            ],
-            input=text.encode("utf-8"),
-            capture_output=True,
-            timeout=10,
+        return b"".join(
+            chunk.audio_int16_bytes for chunk in self._voice.synthesize(text)
         )
-
-        if result.returncode != 0:
-            raise RuntimeError(f"Piper TTS failed: {result.stderr.decode()}")
-
-        return result.stdout
 
     def synthesize_wav(self, text: str) -> bytes:
         """Synthesize text to a WAV file in memory.
