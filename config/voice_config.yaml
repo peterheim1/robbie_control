@@ -76,4 +76,4 @@ ros2:
     speak: "/voice/speak"        # Subscribe: external nodes publish String here to trigger TTS
     cmd_vel: "/cmd_vel"
     drive: "/drive"
-    head_position: "/head_controller/joint_trajectory"
+    head_position: "/head_cmd/user"   # via head_arbiter (robbie_bot) — never /head_controller/joint_trajectory directly

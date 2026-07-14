@@ -87,7 +87,7 @@ class ROS2Dispatcher:
             "ask_and_listen": topics.get("ask_and_listen", "/voice/ask_and_listen"),
             "cmd_vel": topics.get("cmd_vel", "/cmd_vel"),
             "drive": topics.get("drive", "/drive"),
-            "head_position": topics.get("head_position", "/head/position"),
+            "head_position": topics.get("head_position", "/head_cmd/user"),
         }
 
         rclpy.init()
@@ -315,7 +315,7 @@ class ROS2Dispatcher:
         self._pub_intent.publish(msg)
 
     def publish_head(self, pan: float, tilt: float):
-        """Publish head position to /head_controller/joint_trajectory."""
+        """Publish head position to /head_cmd/user (head_arbiter forwards to thor_joint)."""
         msg = JointTrajectory()
         msg.joint_names = ["head_yaw_joint", "head_pitch"]
         pt = JointTrajectoryPoint()
@@ -532,8 +532,20 @@ class ROS2Dispatcher:
         """Return current joint positions in degrees, keyed by joint name."""
         return {name: math.degrees(rad) for name, rad in self._joint_positions.items()}
 
+    def _traj_topic(self, ctrl: str, head_source: str) -> str:
+        """Trajectory topic for a controller.
+
+        Head trajectories go through head_arbiter's /head_cmd/<source>
+        priority topics (robbie_bot, curiosity FSD §8) — never straight to
+        /head_controller/joint_trajectory. Arm controllers are unarbitrated.
+        """
+        if ctrl == 'head_controller':
+            return f'/head_cmd/{head_source}'
+        return f'/{ctrl}/joint_trajectory'
+
     def send_joint_position(self, joint_name: str, deg: float,
-                            move_time_sec: float = 0.5) -> bool:
+                            move_time_sec: float = 0.5,
+                            head_source: str = 'user') -> bool:
         """Move one joint to deg°; hold all other joints in that controller at current positions."""
         ctrl = self._JOINT_CONTROLLER_MAP.get(joint_name)
         if not ctrl:
@@ -552,7 +564,7 @@ class ROS2Dispatcher:
         pt.time_from_start = Duration(sec=sec,
                                       nanosec=int((move_time_sec - sec) * 1_000_000_000))
         msg.points = [pt]
-        pub = self._get_dynamic_pub(JointTrajectory, f'/{ctrl}/joint_trajectory')
+        pub = self._get_dynamic_pub(JointTrajectory, self._traj_topic(ctrl, head_source))
         pub.publish(msg)
         return True
 
@@ -567,7 +579,7 @@ class ROS2Dispatcher:
             pt.time_from_start = Duration(sec=sec,
                                           nanosec=int((move_time_sec - sec) * 1_000_000_000))
             msg.points = [pt]
-            pub = self._get_dynamic_pub(JointTrajectory, f'/{ctrl}/joint_trajectory')
+            pub = self._get_dynamic_pub(JointTrajectory, self._traj_topic(ctrl, 'user'))
             pub.publish(msg)
 
     def send_all_joints(self, joint_dict: dict[str, float], move_time_sec: float = 1.0):
@@ -595,7 +607,7 @@ class ROS2Dispatcher:
             pt.time_from_start = Duration(sec=sec,
                                           nanosec=int((move_time_sec - sec) * 1_000_000_000))
             msg.points = [pt]
-            pub = self._get_dynamic_pub(JointTrajectory, f'/{ctrl}/joint_trajectory')
+            pub = self._get_dynamic_pub(JointTrajectory, self._traj_topic(ctrl, 'user'))
             pub.publish(msg)
 
     def speak(self, text: str):

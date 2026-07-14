@@ -647,13 +647,17 @@ class RobbieVoiceServer:
             with contextlib.suppress(asyncio.CancelledError):
                 await task
             self._dispatcher.send_joint_position(
-                "head_roll", 0.0, move_time_sec=HEAD_TALK_MOVE_SECS)
+                "head_roll", 0.0, move_time_sec=HEAD_TALK_MOVE_SECS,
+                head_source='idle')
 
     async def _head_talk_wobble(self):
         sign = 1
         while True:
+            # idle priority — any real head command (user look, docking
+            # center, boredom scan) outranks the cosmetic wobble
             self._dispatcher.send_joint_position(
-                "head_roll", sign * HEAD_TALK_ROLL_DEG, move_time_sec=HEAD_TALK_MOVE_SECS)
+                "head_roll", sign * HEAD_TALK_ROLL_DEG, move_time_sec=HEAD_TALK_MOVE_SECS,
+                head_source='idle')
             sign *= -1
             await asyncio.sleep(HEAD_TALK_STEP_SECS)
 

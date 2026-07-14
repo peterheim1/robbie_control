@@ -128,7 +128,7 @@ def _parse_ros(spec: str) -> RosAction | None:
         none
         empty:/voice/stop
         twist:/cmd_vel
-        joint_traj:/head_controller/joint_trajectory  head_yaw_joint=-1.0 head_pitch=0.0
+        joint_traj:/head_cmd/user  head_yaw_joint=-1.0 head_pitch=0.0
         float64_array:/drive  values=0,0,0,0
         srv_empty:/undock
     """
