@@ -25,6 +25,7 @@ from pathlib import Path
 
 import yaml
 
+from robbie_control.answer_classifier import classify_answer
 from robbie_control.console_logger import ConsoleLogger
 from robbie_control.tcp_audio_client import TCPAudioClient, LED_IDLE, LED_WAKE, LED_THINKING
 from robbie_control.intent_classifier import IntentClassifier
@@ -142,6 +143,11 @@ class RobbieVoiceServer:
         # and cue face enrollment (used by Argus's meet & greet)
         self._dispatcher.set_ask_and_listen_callback(
             self._ask_and_listen_for_name, asyncio.get_event_loop()
+        )
+        # Wire /voice/ask_question → event-bound question for curiosity_manager's
+        # ASK_USER flow (FSD §9); answer always goes out on /voice/answer.
+        self._dispatcher.set_ask_question_callback(
+            self._ask_question_for_curiosity, asyncio.get_event_loop()
         )
 
         # 2. STT engines (CUDA)
@@ -432,6 +438,48 @@ class RobbieVoiceServer:
         self._dispatcher.publish_train_face(name)
         await self._speak(f"Hello {name}, nice to meet you")
 
+    async def _ask_question_for_curiosity(self, ask: dict):
+        """Ask an event-bound curiosity question and publish exactly one CuriosityAnswer.
+
+        Triggered by /voice/ask_question (curiosity_manager's ASK_USER flow,
+        FSD §9). An answer is always published — even on timeout/no audio —
+        so the manager never hangs in WAITING_FOR_USER. A reply that
+        classifies as a real command is dispatched normally afterward: user
+        commands always win (FSD §9.2 step 3).
+        """
+        event_id = ask.get("event_id", "")
+        question_text = ask.get("question_text", "")
+        timeout_s = float(ask.get("timeout_s", 12.0))
+
+        await self._speak(question_text)
+        transcript = await self.listen_for_answer(timeout=timeout_s)
+
+        known_intent = self._classifier.classify(transcript).name
+        stop_keywords = (self._stop_detector.keywords if self._stop_detector
+                         else {"stop", "halt", "freeze", "emergency"})
+        answer_type = classify_answer(transcript, stop_keywords, known_intent)
+
+        speaker_name, speaker_confidence, _user_present = self._dispatcher.get_speaker_info()
+        # No ASR confidence score is plumbed through yet — 1.0 for any real
+        # transcript, 0.0 for NO_RESPONSE (silence/timeout).
+        speech_confidence = 1.0 if transcript.strip() else 0.0
+
+        self.console.log_info(
+            f"ask_question[{event_id}]: transcript={transcript!r} -> {answer_type}"
+        )
+        self._dispatcher.publish_curiosity_answer(
+            event_id=event_id,
+            transcript=transcript,
+            answer_type=answer_type,
+            speech_confidence=speech_confidence,
+            speaker_name=speaker_name,
+            speaker_confidence=speaker_confidence,
+            interrupted_by_command=(answer_type == "COMMAND"),
+        )
+
+        if answer_type == "COMMAND":
+            await self._process_text(transcript, source="voice")
+
     async def _handle_pipeline(self):
         """Handle a complete voice pipeline: audio → STT → intent → dispatch → TTS."""
         loop = asyncio.get_event_loop()
@@ -594,6 +642,16 @@ class RobbieVoiceServer:
             if not tasks:
                 return "I don't have any tasks loaded"
             return "Available tasks are: " + ", ".join(tasks)
+
+        if intent.name == "curiosity_scan_request":
+            accepted, info = await asyncio.to_thread(
+                self._dispatcher.trigger_curiosity_scan, "USER_REQUEST", "voice"
+            )
+            if accepted:
+                self.console.log_info(f"curiosity_scan_request: accepted, event={info}")
+                return "okay, let me take a look"
+            self.console.log_info(f"curiosity_scan_request: rejected, reason={info}")
+            return "sorry, I can't do that right now"
 
         return intent.response_text
 

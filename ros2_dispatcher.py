@@ -6,6 +6,7 @@ import json
 import logging
 import math
 import threading
+import time
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -21,8 +22,16 @@ from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 from builtin_interfaces.msg import Duration
 from diagnostic_msgs.msg import DiagnosticArray
 from vision_msgs.msg import Detection2DArray
+from robbie_curiosity_interfaces.msg import CuriosityAnswer
+from robbie_curiosity_interfaces.srv import TriggerCuriosityScan
 
 from robbie_control.intent_classifier import Intent
+
+# Mirrors bt_executor's face_name_cb debounce (behaviour_tree/src/bt_executor.cpp) —
+# a candidate name must hold stably for this long before it's "confirmed".
+_FACE_STABILITY_WINDOW_S = 1.5
+# Curiosity FSD §9.4: user_present requires a stable non-"none" face seen within this window.
+_USER_PRESENT_WINDOW_S = 60.0
 
 
 def _json_safe(obj):
@@ -85,6 +94,8 @@ class ROS2Dispatcher:
             "tts_text": topics.get("tts_text", "/voice/tts_text"),
             "speak": topics.get("speak", "/voice/speak"),
             "ask_and_listen": topics.get("ask_and_listen", "/voice/ask_and_listen"),
+            "ask_question": topics.get("ask_question", "/voice/ask_question"),
+            "answer": topics.get("answer", "/voice/answer"),
             "cmd_vel": topics.get("cmd_vel", "/cmd_vel"),
             "drive": topics.get("drive", "/drive"),
             "head_position": topics.get("head_position", "/head_cmd/user"),
@@ -106,6 +117,8 @@ class ROS2Dispatcher:
             Float64MultiArray, self._topic_names["drive"], 10)
         self._pub_head = self._node.create_publisher(
             JointTrajectory, self._topic_names["head_position"], 10)
+        self._pub_answer = self._node.create_publisher(
+            CuriosityAnswer, self._topic_names["answer"], 10)
 
         # Subscriber: /voice/speak — external nodes request TTS output
         self._speak_callback = None   # async coroutine to call
@@ -119,6 +132,24 @@ class ROS2Dispatcher:
         self._ask_and_listen_loop: asyncio.AbstractEventLoop | None = None
         self._sub_ask_and_listen = self._node.create_subscription(
             String, self._topic_names["ask_and_listen"], self._on_ask_and_listen_msg, 10)
+
+        # Subscriber: /voice/ask_question — event-bound question (curiosity_manager's
+        # ASK_USER flow, FSD §9). Answer is always published on /voice/answer.
+        self._ask_question_callback = None   # async coroutine to call
+        self._ask_question_loop: asyncio.AbstractEventLoop | None = None
+        self._sub_ask_question = self._node.create_subscription(
+            String, self._topic_names["ask_question"], self._on_ask_question_msg, 10)
+
+        # Face recognition ("who is present") for curiosity's speaker_name/user_present
+        # (FSD §9.4). Debounced the same way bt_executor's meet-&-greet is.
+        self._pending_face_key = ""
+        self._pending_face_name = ""
+        self._pending_face_since = 0.0
+        self._confirmed_face_key = ""
+        self._confirmed_face_name = ""
+        self._confirmed_face_last_seen = 0.0
+        self._sub_face_name = self._node.create_subscription(
+            String, "/thor/face/name", self._on_face_name_msg, 10)
 
         # Camera (top panel) — latest JPEG frame from the oculus/face-recognition
         # camera, converted from raw bgr8 (updated from spin thread). Not
@@ -209,6 +240,18 @@ class ROS2Dispatcher:
         self._ask_and_listen_callback = callback
         self._ask_and_listen_loop = loop
 
+    def set_ask_question_callback(self, callback, loop: asyncio.AbstractEventLoop):
+        """Register the async callback invoked when /voice/ask_question is received.
+
+        Args:
+            callback: async coroutine function that accepts the parsed request dict
+                      ({event_id, question_text, expected_answer_type, timeout_s,
+                      allow_command_interrupt}).
+            loop:     the running asyncio event loop from the voice server.
+        """
+        self._ask_question_callback = callback
+        self._ask_question_loop = loop
+
     def _on_camera_msg(self, msg: Image):
         """Encode the raw bgr8 frame to JPEG and cache it (called from rclpy spin thread)."""
         if msg.encoding != "bgr8":
@@ -265,6 +308,90 @@ class ROS2Dispatcher:
         asyncio.run_coroutine_threadsafe(
             self._ask_and_listen_callback(question), self._ask_and_listen_loop
         )
+
+    def _on_ask_question_msg(self, msg: String):
+        """Called from the rclpy spin thread when /voice/ask_question is received."""
+        try:
+            ask = json.loads(msg.data)
+        except (json.JSONDecodeError, TypeError):
+            logger.warning(f"/voice/ask_question: malformed JSON: {msg.data!r}")
+            return
+        if not ask.get("event_id") or not ask.get("question_text"):
+            logger.warning(f"/voice/ask_question: missing event_id/question_text: {ask!r}")
+            return
+        if not self._ask_question_callback or not self._ask_question_loop:
+            return
+        asyncio.run_coroutine_threadsafe(
+            self._ask_question_callback(ask), self._ask_question_loop
+        )
+
+    def publish_curiosity_answer(self, event_id: str, transcript: str, answer_type: str,
+                                 speech_confidence: float = 0.0, speaker_name: str = "",
+                                 speaker_confidence: float = 0.0,
+                                 interrupted_by_command: bool = False):
+        """Publish exactly one CuriosityAnswer per /voice/ask_question (FSD §9.2 step 5)."""
+        msg = CuriosityAnswer()
+        msg.stamp = self._node.get_clock().now().to_msg()
+        msg.event_id = event_id
+        msg.transcript = transcript
+        msg.answer_type = answer_type
+        msg.speech_confidence = float(speech_confidence)
+        msg.speaker_name = speaker_name
+        msg.speaker_confidence = float(speaker_confidence)
+        msg.interrupted_by_command = interrupted_by_command
+        self._pub_answer.publish(msg)
+
+    def _on_face_name_msg(self, msg: String):
+        """Called from the rclpy spin thread when /thor/face/name is published.
+
+        Debounce mirrors bt_executor's face_name_cb: a candidate must hold
+        stably for _FACE_STABILITY_WINDOW_S before being confirmed.
+        """
+        name = msg.data
+        key = name.strip().lower()
+        now = time.monotonic()
+        if key != self._pending_face_key:
+            self._pending_face_key = key
+            self._pending_face_name = name
+            self._pending_face_since = now
+        if now - self._pending_face_since < _FACE_STABILITY_WINDOW_S:
+            return
+        self._confirmed_face_key = self._pending_face_key
+        self._confirmed_face_name = self._pending_face_name
+        self._confirmed_face_last_seen = now
+
+    def get_speaker_info(self) -> tuple[str, float, bool]:
+        """Return (speaker_name, speaker_confidence, user_present) for curiosity answers.
+
+        FSD §9.4: user_present requires a stable non-"none" face seen within the
+        last _USER_PRESENT_WINDOW_S. speaker_name is only set for a confirmed,
+        identified ("not unknown") face — no ASR/vision confidence score is
+        actually plumbed through yet, so speaker_confidence is 1.0 or 0.0.
+        """
+        if not self._confirmed_face_key:
+            return "", 0.0, False
+        stale = (time.monotonic() - self._confirmed_face_last_seen) > _USER_PRESENT_WINDOW_S
+        user_present = self._confirmed_face_key != "none" and not stale
+        if stale or self._confirmed_face_key in ("none", "unknown"):
+            return "", 0.0, user_present
+        return self._confirmed_face_name, 1.0, user_present
+
+    def trigger_curiosity_scan(self, trigger: str = "USER_REQUEST",
+                               requested_by: str = "voice") -> tuple[bool, str]:
+        """Call /curiosity/trigger_scan (blocking). Returns (accepted, event_id_or_reason)."""
+        client = self._get_service_client(TriggerCuriosityScan, "/curiosity/trigger_scan")
+        if not client.wait_for_service(timeout_sec=3.0):
+            logger.warning("Service /curiosity/trigger_scan not available")
+            return False, "curiosity service unavailable"
+        req = TriggerCuriosityScan.Request()
+        req.trigger = trigger
+        req.requested_by = requested_by
+        try:
+            resp = client.call(req)
+            return bool(resp.accepted), (resp.event_id if resp.accepted else resp.reason)
+        except Exception as e:
+            logger.error(f"trigger_curiosity_scan failed: {e}")
+            return False, str(e)
 
     def publish_train_face(self, name: str):
         """Publish a train_face intent to /voice/intent, cueing face enrollment."""

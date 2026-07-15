@@ -105,6 +105,20 @@ intents:
     params: {}
     response: null
 
+  # Curiosity FSD §6.2 — user-triggered curiosity scan (USER_REQUEST). Must
+  # sit ahead of general_question (98) since "what is that"/"what do you
+  # see" would otherwise fall into the LLM question fallback.
+  curiosity_scan_request:
+    priority: 14
+    patterns:
+      - "what(?:'s|\\s+is)\\s+that"
+      - "what\\s+do\\s+you\\s+see"
+      - "what\\s+can\\s+you\\s+see"
+      - "(?:have|take)\\s+a\\s+look\\s+around"
+      - "^look\\s+around$"
+    params: {}
+    response: null
+
   persona_age:
     priority: 25
     patterns:
